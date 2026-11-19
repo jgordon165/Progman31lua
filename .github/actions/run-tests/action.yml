@@ -1,0 +1,25 @@
+name: run-tests
+description: cross-platform action to run the Progman31lua tests
+
+inputs:
+  build_dir:
+    required: false
+    default: build
+  configuration:
+    description: CMake configuration (multi-config generators such as Visual Studio)
+    required: false
+    default: Release
+
+runs:
+  using: "composite"
+  steps:
+    # The repository contains no Windows 3.1 files, so only the data-free
+    # tests run here (the file formats on synthetic input, the x86
+    # recompiler on hand-assembled code, booting without PROGMAN.EXE).
+    # Running Program Manager itself needs PROGMAN31LUA_DATA at configure.
+    - name: Run tests
+      run: ctest --test-dir "${{inputs.build_dir}}" -C ${{inputs.configuration}} --output-on-failure
+      shell: pwsh
+      env:
+        SDL_VIDEODRIVER: dummy
+        SDL_AUDIODRIVER: dummy
