@@ -490,5 +490,6 @@ def("GDI", 153, "CreateIC", "s s s p", function(driver) return displayDC(driver)
 def("GDI", 38, "Escape", "h i i f f", function() return 0 end)
 def("GDI", 245, "GetSpoolJob", "w l", function() return 0 end)
 def("GDI", 467, "GDI467", "f f", function() return 0 end)
+def("GDI", 461, "SetObjectOwner", "h h:v", function() end)
 
 return {}
