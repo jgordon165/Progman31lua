@@ -53,21 +53,37 @@ end
 
 -- ---- the logo -------------------------------------------------------------------------
 
--- Shows VGALOGO.RLE (a 4-bit RLE bitmap) centred on its own background,
--- scaled to the screen's height as it filled a 640x480 VGA screen.
-local function showLogo(data)
+-- Shows VGALOGO.RLE (a 4-bit RLE bitmap) centred on black, scaled to the
+-- screen's height as it filled a 640x480 VGA screen, rebranded (logo.lua).
+local function showLogo(data, shot)
     local rle = boot.dataFile(data, "VGALOGO.RLE")
     if not rle or rle:sub(1, 2) ~= "BM" then return false end
     local id, w, h = fb.dib(rle:sub(15))
     if not id then return false end
+    local fonts = {}
+    local serif = boot.dataFile(data, "SERIFE.FON")
+    local m = serif and require("recomp.ne").parse(serif, "SERIFE.FON")
+    if m then
+        for _, r in ipairs(m:resourcesOf(8)) do fonts[#fonts + 1] = m:resourceBytes(r) end
+    end
+    -- Script (SCRIPT.FON) for the footer's cursive word
+    local scriptFont
+    local sb = boot.dataFile(data, "SCRIPT.FON")
+    local sm = sb and require("recomp.ne").parse(sb, "SCRIPT.FON")
+    if sm then
+        local r = sm:resourcesOf(8)[1]
+        scriptFont = r and sm:resourceBytes(r)
+    end
+    local ok, err = pcall(require("logo").rebrand, id, w, h, fonts, scriptFont)
+    if not ok then host.log("logo: " .. tostring(err)) end
     local sw, sh = fb.size(0)
-    local bg = fb.pixel(id, 0, 0) or 0
     fb.clip(nil)
-    fb.patblt(0, 0, 0, sw, sh, 0xF0, bg)
+    fb.patblt(0, 0, 0, sw, sh, 0xF0, 0x000000)
     local k = sh / 480
     local dw, dh = math.floor(w * k + 0.5), math.floor(h * k + 0.5)
     fb.stretchblt(0, (sw - dw) // 2, (sh - dh) // 2, dw, dh, id, 0, 0, w, h, 0xCC, 0, 0, 0)
     fb.free(id)
+    if shot then fb.save_bmp(0, shot) end
     host.present()
     return true
 end
@@ -110,7 +126,8 @@ function boot.run(opts)
             "PROGMAN.EXE was not found.")
     end
 
-    local logo = not opts["no-logo"] and showLogo(data)
+    local logo = not opts["no-logo"] and showLogo(data, type(opts["logo-shot"]) == "string" and opts["logo-shot"])
+    if opts["logo-shot"] then return 0 end
 
     local home = type(opts.home) == "string" and opts.home or host.pref_path():gsub("[\\/]$", "")
     host.mkdir(home)
