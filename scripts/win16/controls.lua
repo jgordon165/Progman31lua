@@ -298,7 +298,8 @@ local function staticProc(hwnd, msg, wp, lp)
     if msg == WM.CREATE then
         if kind == SS_ICON and w.text ~= "" then
             local name = w.iconName or w.text
-            w.icon = (user.module and require("win16.resources").moduleIcon(user.module, name)) or res.systemIcon(name)
+            local m = require("win16.kernel").neModule(w.inst)
+            w.icon = (m and require("win16.resources").moduleIcon(m, name)) or res.systemIcon(name)
             w.text = ""
             user.setPos(w, w.x, w.y, MT.CXICON, MT.CYICON)
         end
@@ -306,6 +307,11 @@ local function staticProc(hwnd, msg, wp, lp)
     elseif msg == WM.PAINT then
         local hdc, dc = paintDC(w)
         local cw, ch = size(w)
+        if kind == 0xA then
+            -- SS_USERITEM: a place the dialog draws in itself
+            endPaint(w, hdc)
+            return 0
+        end
         local bg = ctlColor(w, hdc, 6)
         if kind == SS_ICON then
             user.fillRect(dc, {0, 0, cw, ch}, bg)
@@ -388,6 +394,7 @@ local function editEnsureVisible(w)
     local dc = editFont(w)
     local cw = size(w)
     local x = gdi.textWidth(dc, editShown(w):sub(1, e.s1))
+    if gdi.textWidth(dc, editShown(w)) <= cw then e.scroll = 0; return end
     local margin = 1
     if x - e.scroll > cw - 2 then e.scroll = x - cw + 2 + 8 end
     if x - e.scroll < 0 then e.scroll = math.max(0, x - 8) end
@@ -449,6 +456,11 @@ local function editProc(hwnd, msg, wp, lp)
         local th = gdi.fontHeight(dc)
         local ty = w.style & ES_MULTILINE ~= 0 and 0 or math.max((ch - th) // 2, 0)
         local x = 1 - e.scroll
+        -- centred or right-aligned text (when it fits)
+        local tw = gdi.textWidth(dc, s)
+        if tw <= cw and w.style & (ES_CENTER | ES_RIGHT) ~= 0 then
+            x = (w.style & ES_CENTER ~= 0) and (cw - tw) // 2 or (cw - tw - 1)
+        end
         if w.disabled then dc.text = C[COLOR.GRAYTEXT] end
         dc.bkMode = 2
         local a, b = math.min(e.s0, e.s1), math.max(e.s0, e.s1)
@@ -968,6 +980,15 @@ local function lbProc(hwnd, msg, wp, lp)
             end
         end
         return 0xFFFF
+    elseif msg == 0x40E then       -- LB_DIR: adds the entries for a file spec
+        local l = cpu.flat(lp)
+        local last = 0xFFFF
+        local mark = api.mark()
+        for _, n in ipairs(user.dirEntries(l and mem.cstr(l) or "*.*", wp)) do
+            last = user.send(w, 0x401, 0, (api.str(n)))
+        end
+        api.release(mark)
+        return last
     elseif msg == 0x40F then       -- LB_GETTOPINDEX
         return lb.top
     elseif msg == 0x418 then       -- LB_SETTOPINDEX
@@ -1026,10 +1047,37 @@ local function cbText(w)
     return it and it.text or ""
 end
 
+local CBS_OWNERDRAWFIXED, CBS_OWNERDRAWVARIABLE, CBS_HASSTRINGS = 0x10, 0x20, 0x200
+local function cbOwner(w) return w.style & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE) ~= 0 end
+
+-- WM_DRAWITEM to the parent for an owner-drawn combo box: item i (-1: none)
+-- in rect r of dc.
+local function cbDrawOwner(w, dc, i, r, selected, focused)
+    local cb = cbState(w)
+    local it = cb.items[i + 1]
+    local mark = api.mark()
+    local fp, d = api.alloc(26)
+    ww(d, 3); ww(d + 2, w.id or 0); ww(d + 4, i & 0xFFFF); ww(d + 6, 1)
+    ww(d + 8, (selected and 1 or 0) | (w.disabled and 4 or 0) | (focused and 0x10 or 0))
+    ww(d + 10, w.handle); ww(d + 12, dc.handle); api.setrect(d + 14, r); wd(d + 22, it and it.data or 0)
+    user.send(w.parent, WM.DRAWITEM, w.id or 0, fp)
+    api.release(mark)
+end
+
+local function cbMeasure(w, i)
+    local mark = api.mark()
+    local fp, m = api.alloc(14)
+    ww(m, 3); ww(m + 2, w.id or 0); ww(m + 4, i & 0xFFFF); ww(m + 6, w.w); ww(m + 8, 16); wd(m + 10, 0)
+    user.send(w.parent, WM.MEASUREITEM, w.id or 0, fp)
+    local h = math.max(rw(m + 8), 1)
+    api.release(mark)
+    return h
+end
+
 local function cbDrop(w)
     local cb = cbState(w)
     local font = {font = (w.font and w.font ~= 0) and w.font or gdi.stock(13)}
-    local ih = gdi.fontHeight(font)
+    local ih = cbOwner(w) and (cb.itemH or 16) or gdi.fontHeight(font)
     local x, y = user.screenPos(w)
     local n = #cb.items
     local rows = math.max(math.min(n, math.max((cb.dropH - w.h) // ih, 1)), 1)
@@ -1038,8 +1086,32 @@ local function cbDrop(w)
     if ly + lh > user.desktop.h then ly = y - lh end
     local top = math.max(0, math.min(cb.sel, n - rows))
     local hot = cb.sel
+    -- owner-drawn items are drawn by the parent into a bitmap the list shows
+    local surf, sdc, drawnHot, drawnTop
+    if cbOwner(w) then
+        surf = fb.new(lw, lh)
+        sdc = gdi.dc(gdi.newDC({surface = surf, ox = 0, oy = 0}))
+    end
+    local function render()
+        if drawnHot == hot and drawnTop == top then return end
+        drawnHot, drawnTop = hot, top
+        fb.clip(nil)
+        fb.patblt(surf, 0, 0, lw, lh, 0xF0, 0)
+        fb.patblt(surf, 1, 1, lw - 2, lh - 2, 0xF0, C[COLOR.WINDOW])
+        for r = 0, rows - 1 do
+            local i = top + r
+            if cb.items[i + 1] then
+                local iy = 1 + r * ih
+                cbDrawOwner(w, sdc, i, {1, iy, lw - 1, iy + ih}, i == hot, i == hot)
+            end
+        end
+    end
     local function draw()
         fb.clip(nil)
+        if surf then
+            fb.bitblt(0, x, ly, lw, lh, surf, 0, 0, 0xCC, 0, 0, 0)
+            return
+        end
         fb.patblt(0, x, ly, lw, lh, 0xF0, 0)
         fb.patblt(0, x + 1, ly + 1, lw - 2, lh - 2, 0xF0, C[COLOR.WINDOW])
         local f = gdi.fontObj(font)
@@ -1056,6 +1128,7 @@ local function cbDrop(w)
             end
         end
     end
+    if surf then render() end
     local ov = {x = x, y = ly, w = lw, h = lh, draw = draw}
     user.overlays[#user.overlays + 1] = ov
     notify(w, 7)   -- CBN_DROPDOWN
@@ -1069,7 +1142,7 @@ local function cbDrop(w)
             local inside = mx >= x and mx < x + lw and my >= ly + 1 and my < ly + lh - 1
             if inside then
                 local i = top + (my - ly - 1) // ih
-                if i ~= hot and cb.items[i + 1] then hot = i; user.dirty = true end
+                if i ~= hot and cb.items[i + 1] then hot = i; user.dirty = true; if surf then render() end end
                 if ev.kind == "up" then chosen = hot; break end
             elseif ev.kind == "down" then
                 local wr = user.windowRect(w)
@@ -1082,6 +1155,7 @@ local function cbDrop(w)
             elseif vk == 0x26 and hot > 0 then hot = hot - 1
             elseif vk == 0x28 and hot < n - 1 then hot = hot + 1 end
             if hot < top then top = hot elseif hot >= top + rows then top = hot - rows + 1 end
+            if surf then render() end
             user.dirty = true
         elseif ev.kind == "close" then
             table.insert(user.input, 1, ev)
@@ -1090,6 +1164,7 @@ local function cbDrop(w)
         user.present()
     end
     for i, o in ipairs(user.overlays) do if o == ov then table.remove(user.overlays, i); break end end
+    if surf then handles.free(sdc.handle); fb.free(surf) end
     user.buttons[1] = false
     user.dirty = true
     if chosen and chosen ~= cb.sel then
@@ -1106,8 +1181,15 @@ local function cbProc(hwnd, msg, wp, lp)
     local cb = cbState(w)
     if msg == WM.CREATE then
         cb.dropH = w.h
+        -- the scroll bar styles are for the drop-down list
+        w.style = w.style & ~(WS.VSCROLL | WS.HSCROLL)
+        w.vscroll, w.hscroll = nil, nil
         local font = {font = gdi.stock(13)}
         local h = gdi.fontHeight(font) + 6
+        if cbOwner(w) then
+            h = cbMeasure(w, -1) + 6
+            cb.itemH = cbMeasure(w, 0)
+        end
         w.h = h
         user.calcClient(w)
         return 0
@@ -1133,6 +1215,12 @@ local function cbProc(hwnd, msg, wp, lp)
         local th = gdi.fontHeight(dc)
         local focused = hasFocus(w)
         local tr = {2, 2, bx - 1, ch - 2}
+        if cbOwner(w) then
+            dc.text, dc.bk = C[COLOR.WINDOWTEXT], C[COLOR.WINDOW]
+            cbDrawOwner(w, dc, cb.sel, tr, focused, focused)
+            endPaint(w, hdc)
+            return 0
+        end
         if focused then
             user.fillRect(dc, tr, user.sysBrush(COLOR.HIGHLIGHT))
             dc.text, dc.bk = C[COLOR.HIGHLIGHTTEXT], C[COLOR.HIGHLIGHT]
@@ -1176,8 +1264,12 @@ local function cbProc(hwnd, msg, wp, lp)
         end
         return 0
     elseif msg == 0x403 or msg == 0x40A then      -- CB_ADDSTRING / CB_INSERTSTRING
-        local l = cpu.flat(lp)
-        local text = l and mem.cstr(l) or ""
+        local text, data = "", 0
+        if cbOwner(w) and w.style & CBS_HASSTRINGS == 0 then data = lp
+        else
+            local l = cpu.flat(lp)
+            text = l and mem.cstr(l) or ""
+        end
         local at
         if msg == 0x403 then
             at = #cb.items + 1
@@ -1188,7 +1280,7 @@ local function cbProc(hwnd, msg, wp, lp)
         else
             at = s16(wp) == -1 and #cb.items + 1 or math.min(wp + 1, #cb.items + 1)
         end
-        table.insert(cb.items, at, {text = text, data = 0})
+        table.insert(cb.items, at, {text = text, data = data})
         if cb.sel >= at - 1 and cb.sel >= 0 then cb.sel = cb.sel + 1 end
         user.invalidate(w, nil, true)
         return at - 1

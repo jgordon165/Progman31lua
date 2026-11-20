@@ -62,7 +62,7 @@ function menu.fromResource(data)
 end
 
 function user.loadMenu(inst, name)
-    local m = user.module
+    local m = require("win16.kernel").neModule(inst)
     local data = m and m:resource(4, name)
     if not data then return 0 end
     return menu.fromResource(data)

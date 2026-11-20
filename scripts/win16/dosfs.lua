@@ -94,10 +94,16 @@ end
 
 -- For a file in C:\WINDOWS that isn't there: the same file from the setup
 -- disk, or its compressed form (NOTEPAD.EX_). Returns the expanded bytes.
+-- Setup files that Windows keeps in SYSTEM only (Control Panel looks for
+-- SETUP.INF and CONTROL.INF there, and finds its applets there)
+local SYSTEM_ONLY = {INF = true, CPL = true}
+
 local function fromData(full)
     if not dataDir or not underWindows(full) then return nil end
     local name = full:match("([^\\]+)$")
     if not name then return nil end
+    local ext = name:upper():match("%.(%w+)$")
+    if ext and SYSTEM_ONLY[ext] and full:upper() ~= (dosfs.system .. "\\" .. name):upper() then return nil end
     local p = findCi(dataDir, name)
     if not p then
         local sub = findCi(dataDir, "WINDOWS")

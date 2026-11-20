@@ -40,6 +40,7 @@ function loader.load(mod, resolver, opts)
         return inst.sels[e.seg], e.off
     end
     inst.entryAddr = entryAddr
+    if opts.beforeRelocs then opts.beforeRelocs(inst) end
 
     -- relocations
     local stats = {imports = 0, internal = 0}

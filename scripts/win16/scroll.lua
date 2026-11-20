@@ -106,7 +106,7 @@ user.scrollBarOf = getBar
 def("USER", 62, "SetScrollPos", "h i i w", function(h, bar, pos, redraw)
     local w = W(h)
     if not w then return 0 end
-    if bar == 2 then return user.send(w, 0x0400 + 0x00E0, pos, redraw) end  -- SBM_SETPOS for controls
+    if bar == 2 then return user.scrollCtl(w, "setpos", pos, redraw) end   -- SB_CTL: a SCROLLBAR control
     local sb = getBar(w, bar)
     if not sb then return 0 end
     local old = sb.pos
@@ -117,12 +117,14 @@ end)
 def("USER", 63, "GetScrollPos", "h i", function(h, bar)
     local w = W(h)
     if not w then return 0 end
+    if bar == 2 then return user.scrollCtlState(w).pos end
     local sb = getBar(w, bar)
     return sb and sb.pos or 0
 end)
 def("USER", 64, "SetScrollRange", "h i i i w:v", function(h, bar, lo, hi, redraw)
     local w = W(h)
     if not w then return end
+    if bar == 2 then user.scrollCtl(w, "setrange", lo, hi); return end
     local sb = getBar(w, bar)
     if not sb then return end
     sb.min, sb.max = lo, hi
@@ -137,7 +139,7 @@ def("USER", 64, "SetScrollRange", "h i i i w:v", function(h, bar, lo, hi, redraw
 end)
 def("USER", 65, "GetScrollRange", "h i p p:v", function(h, bar, pmin, pmax)
     local w = W(h)
-    local sb = w and getBar(w, bar)
+    local sb = w and (bar == 2 and user.scrollCtlState(w) or getBar(w, bar))
     if pmin then mem.ww(pmin, sb and sb.min & 0xFFFF or 0) end
     if pmax then mem.ww(pmax, sb and sb.max & 0xFFFF or 0) end
 end)

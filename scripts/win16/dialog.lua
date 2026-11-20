@@ -148,7 +148,8 @@ function dialog.create(t, owner, proc, param, inst)
         if c then
             if it.textOrd then
                 -- an icon by number
-                c.icon = (user.module and res.moduleIcon(user.module, it.textOrd)) or res.systemIcon(it.textOrd)
+                local m = require("win16.kernel").neModule(inst)
+                c.icon = (m and res.moduleIcon(m, it.textOrd)) or res.systemIcon(it.textOrd)
                 if c.icon then user.setPos(c, c.x, c.y, MT.CXICON, MT.CYICON) end
             end
             if font then user.send(c, WM.SETFONT, font, 0) end
@@ -462,7 +463,8 @@ function dialog.runModal(d, owner)
 end
 
 def("USER", 87, "DialogBox", "h r h f", function(inst, name, hparent, proc)
-    local data = user.module and user.module:resource(5, name)
+    local m = require("win16.kernel").neModule(inst)
+    local data = m and m:resource(5, name)
     if not data then return 0xFFFF end
     local owner = W(hparent)
     if owner then owner = user.topLevel(owner) end
@@ -472,7 +474,8 @@ def("USER", 87, "DialogBox", "h r h f", function(inst, name, hparent, proc)
     return dialog.runModal(d, owner)
 end)
 def("USER", 239, "DialogBoxParam", "h r h f l", function(inst, name, hparent, proc, param)
-    local data = user.module and user.module:resource(5, name)
+    local m = require("win16.kernel").neModule(inst)
+    local data = m and m:resource(5, name)
     if not data then return 0xFFFF end
     local owner = W(hparent)
     if owner then owner = user.topLevel(owner) end
@@ -481,7 +484,8 @@ def("USER", 239, "DialogBoxParam", "h r h f l", function(inst, name, hparent, pr
     return dialog.runModal(d, owner)
 end)
 def("USER", 89, "CreateDialog", "h r h f", function(inst, name, hparent, proc)
-    local data = user.module and user.module:resource(5, name)
+    local m = require("win16.kernel").neModule(inst)
+    local data = m and m:resource(5, name)
     if not data then return 0 end
     local d = dialog.create(dialog.parse(data), W(hparent), proc, 0, inst)
     return d and d.handle or 0

@@ -92,7 +92,7 @@ function ne.parse(data, path)
                 if kind == 0 then
                     -- unused ordinals
                 elseif kind == 0xFF then   -- movable: flags, int 3Fh, seg, off
-                    m.entries[ord] = {flags = data:byte(at + 1), seg = data:byte(at + 5), off = u16(data, at + 5)}
+                    m.entries[ord] = {flags = data:byte(at + 1), seg = data:byte(at + 4), off = u16(data, at + 4)}
                     at = at + 6
                 elseif kind == 0xFE then   -- constant
                     m.entries[ord] = {flags = data:byte(at + 1), seg = 0, off = u16(data, at + 1), const = true}

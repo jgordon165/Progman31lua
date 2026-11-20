@@ -1,9 +1,11 @@
 -- Starting programs from Program Manager (WinExec, ShellExecute).
 --
--- The Windows 3.1 programs can't run on 64-bit Windows, so each starts its
--- modern counterpart, from [Programs] in PROGMAN31.INI (in Program
--- Manager's Windows folder; edit it to choose your own). Any other program
--- or document is started by the host: modern programs run as themselves.
+-- The Windows 3.1 programs can't run on 64-bit Windows, so each starts
+-- either the original itself, recompiled alongside Program Manager ("*",
+-- as Control Panel does), or a modern counterpart, from [Programs] in
+-- PROGMAN31.INI (in Program Manager's Windows folder; edit it to choose
+-- your own). Any other program or document is started by the host: modern
+-- programs run as themselves.
 
 local dosfs = require("win16.dosfs")
 local profile = require("win16.profile")
@@ -15,7 +17,7 @@ local INI = "PROGMAN31.INI"
 -- Windows 3.1 program -> what to start instead ("" = nothing equivalent)
 launch.defaults = {
     ["NOTEPAD.EXE"] = "notepad.exe", ["CALC.EXE"] = "calc.exe", ["WRITE.EXE"] = "write.exe",
-    ["PBRUSH.EXE"] = "mspaint.exe", ["WINFILE.EXE"] = "explorer.exe", ["CONTROL.EXE"] = "control.exe",
+    ["PBRUSH.EXE"] = "mspaint.exe", ["WINFILE.EXE"] = "explorer.exe", ["CONTROL.EXE"] = "*",
     ["PRINTMAN.EXE"] = "ms-settings:printers", ["CLIPBRD.EXE"] = "ms-settings:clipboard",
     ["CHARMAP.EXE"] = "charmap.exe", ["SOUNDREC.EXE"] = "ms-settings:sound", ["MPLAYER.EXE"] = "wmplayer.exe",
     ["CLOCK.EXE"] = "ms-clock:", ["CALENDAR.EXE"] = "outlookcal:", ["CARDFILE.EXE"] = "",
@@ -27,11 +29,24 @@ launch.defaults = {
     ["WINVER.EXE"] = "winver.exe", ["README.WRI"] = "write.exe",
 }
 
+-- Entries that changed from a modern program to the recompiled original
+-- since an older PROGMAN31.INI was written.
+launch.upgrades = {["CONTROL.EXE"] = "control.exe"}
+
 function launch.installDefaults()
     local path = dosfs.windows .. "\\" .. INI
-    if dosfs.exists(path) then return end
+    if dosfs.exists(path) then
+        for k, old in pairs(launch.upgrades) do
+            if (profile.get(path, "Programs", k) or ""):lower() == old then
+                profile.set(path, "Programs", k, launch.defaults[k])
+                profile.flush(path)
+            end
+        end
+        return
+    end
     local lines = {"; Progman31lua: what starts when you run a Windows 3.1 program from Program Manager.",
                    "; Change the right-hand side to any program, document or URL; leave it empty to do nothing.",
+                   "; * runs the original Windows 3.1 program itself, recompiled.",
                    "[Programs]"}
     local keys = {}
     for k in pairs(launch.defaults) do keys[#keys + 1] = k end
@@ -94,6 +109,9 @@ function launch.run(cmd, show)
     local m = mapped(name)
     if m ~= nil and (full == nil or full:sub(1, #dosfs.windows) == dosfs.windows) then
         if m == "" then return 11 end
+        if m == "*" then
+            return require("win16.kernel").exec(full or (dosfs.windows .. "\\" .. name), params, show)
+        end
         local target = m
         if m:lower() == "solitairepack.exe" then target = besideUs(m) or m end
         -- a document parameter in C:\WINDOWS goes as its host path

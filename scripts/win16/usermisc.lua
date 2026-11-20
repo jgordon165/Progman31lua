@@ -578,9 +578,9 @@ end)
 
 local function instModule(inst)
     if not inst or inst == 0 then return nil end
-    if user.task and (inst == user.task.hInstance or inst == user.task.dgroup) then return user.module end
-    return user.module
+    return kernel.neModule(inst)
 end
+user.instModule = instModule
 
 def("USER", 174, "LoadIcon", "h r", function(inst, name)
     if inst == 0 or not inst then return res.systemIcon(name) or 0 end
