@@ -30,7 +30,7 @@ function kernel.gfree(h)
     local g = globals[h]
     if not g then return h end
     globals[h] = nil
-    cpu.lfree(g.base)
+    if not g.discarded then cpu.lfree(g.base) end
     cpu.freesel(h)
     return 0
 end
@@ -44,8 +44,27 @@ function kernel.grealloc(h, size, flags)
         g.flags = (g.flags & ~0x7F00) | (flags & 0x7F00)
         return h
     end
-    if size == 0 then size = 16 end
+    if size == 0 then
+        -- GMEM_MOVEABLE with size 0 discards the block: GlobalLock fails and
+        -- GlobalSize says 0 until it is reallocated
+        if flags & 0x2 ~= 0 then
+            if not g.discarded then
+                cpu.lfree(g.base)
+                g.discarded = true
+                g.size, g.alloc = 0, 0
+                g.lock = 0
+            end
+            return h
+        end
+        size = 16
+    end
     if size > 0x10000 then return 0 end
+    if g.discarded then
+        local base = cpu.lalloc(size)
+        g.base, g.size, g.alloc, g.discarded = base, size, size, false
+        cpu.setsel(h, base, size - 1)
+        return h
+    end
     if size <= g.alloc then
         if (flags & 0x40) ~= 0 and size > g.size then mem.fill(g.base + g.size, size - g.size, 0) end
         g.size = size
@@ -62,7 +81,7 @@ end
 -- A handle (selector) or a far pointer's selector -> the block's linear base
 function kernel.glin(h)
     local g = globals[h]
-    return g and g.base
+    return g and not g.discarded and g.base or nil
 end
 
 -- ---- the local heap (in DGROUP, above the stack) ----------------------------------------
@@ -140,7 +159,8 @@ function kernel.startTask(inst, opts)
     ww(pb + 0x2C, envSel)
     local cl = opts.cmdLine or ""
     wb(pb + 0x80, #cl)
-    mem.write(pb + 0x81, cl .. "\r")
+    -- the C runtime reads the command line up to a NUL; DOS ends it with CR
+    mem.write(pb + 0x81, cl .. "\0\r")
 
     local task = {R = R, inst = inst, hInstance = dgroup, psp = psp, cmdShow = opts.cmdShow or 1,
                   path = opts.path, dgroup = dgroup, dgroupBase = inst.bases[mod.autoData],
@@ -200,6 +220,7 @@ def("KERNEL", 18, "GlobalLock", "h:l", function(h)
         if cpu.sel(h) then return h << 16 end   -- a segment that isn't a global block (DGROUP, ...)
         return 0
     end
+    if g.discarded then return 0 end
     g.lock = g.lock + 1
     return h << 16
 end)
@@ -211,6 +232,12 @@ end)
 def("KERNEL", 20, "GlobalSize", "h:l", function(h)
     local g = globals[h]
     return g and g.size or 0
+end)
+-- GlobalFlags: lock count, GMEM_DISCARDABLE 0x100, GMEM_DISCARDED 0x4000
+def("KERNEL", 22, "GlobalFlags", "h", function(h)
+    local g = globals[h]
+    if not g then return 0 end
+    return (g.lock & 0xFF) | (g.flags & 0x100) | (g.discarded and 0x4000 or 0)
 end)
 
 def("KERNEL", 5, "LocalAlloc", "w w", function(flags, size) return kernel.lalloc(flags, size) end)
@@ -546,6 +573,19 @@ local function dos(R)
         R.cx = (t.hour << 8) | t.min; R.dx = (t.sec << 8)
     elseif ah == 0x44 then      -- ioctl: get device info: a file on drive C
         R.dx = 0x0002; setCarry(R, nil)
+    elseif ah == 0x57 then      -- file date and time: get (AL=0) from the file, set (AL=1) accepted
+        local f = dosfs.file(R.bx)
+        if not f then setCarry(R, 6)
+        else
+            if al == 0 then
+                local hp = dosfs.hostPath(f.path)
+                local st = hp and host.stat(hp)
+                local t = os.date("*t", st and st.mtime or os.time())
+                R.cx = (t.hour << 11) | (t.min << 5) | (t.sec // 2)
+                R.dx = ((t.year - 1980) << 9) | (t.month << 5) | t.day
+            end
+            setCarry(R, nil)
+        end
     elseif ah == 0x4C then
         error({exit = al}, 0)
     elseif ah == 0x25 or ah == 0x35 then   -- set/get vector: ignored

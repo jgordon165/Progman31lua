@@ -45,6 +45,34 @@ thunks and from USER.
 | `dosfs.lua` | the DOS file system Program Manager sees |
 | `profile.lua` | .INI files |
 | `region.lua`, `handles.lua` | rectangle-list regions; USER/GDI handles |
+| `gdi.lua` | DCs, brushes, raster fonts from the user's .FON files, bitmaps, regions, icons (HICONs are global blocks in Windows 3.1's internal format, 4 bits per pixel) |
+| `user.lua` | windows, classes, z-order and visible regions, update regions and painting, the message queue, input, focus and activation |
+| `defwnd.lua` | DefWindowProc: frames and captions from the display driver's OBM bitmaps, hit testing, moving and sizing, system commands, minimized windows |
+| `usermisc.lua` | the rest of USER's API: window words, placement, rectangles, DrawText, accelerators, resources, atoms, hooks, wsprintf, carets |
+| `scroll.lua`, `menu.lua`, `mdi.lua` | window scroll bars; menus (popups are overlays drawn over the screen at each present); MDI |
+| `controls.lua`, `dialog.lua` | BUTTON, STATIC, EDIT, LISTBOX, COMBOBOX; dialog templates, the modal loop, the dialog manager, MessageBox |
+| `dragdrop.lua` | DragObject, which moves items between groups |
+| `resources.lua`, `pe.lua`, `shell.lua` | icons/cursors/bitmaps from NE modules; icons from modern PE programs; SHELL (ExtractIcon, ShellExecute, About) |
+| `launch.lua` | WinExec/ShellExecute: Windows 3.1 programs start their modern counterparts (`[Programs]` in PROGMAN31.INI) |
+| `setup.lua` | first run: Setup's DDE conversation, from SETUP.INF |
+
+### Painting
+
+Every DC is clipped to its window's visible region: the window, minus the
+windows above it at every level, minus its own children. When a window
+moves, shows or hides, the screen area involved is "damaged": every window
+under it gets its frame redrawn and that part of its client area
+invalidated. Program Manager then repaints in its own message loop, as in
+Windows. Things drawn over the screen for a moment (menus, the move/size
+outline, the icon being dragged, combo box lists) are overlays: they're drawn
+onto the screen just before each present and taken away right after.
+
+### Testing
+
+`tests/lua/test_progman.lua` runs Program Manager headless from an empty
+home with scripted input (`--script`). It checks that Setup's groups exist,
+that File > Run and double-clicking start the right programs, and that a
+dragged item lands in the other group's `.GRP` file.
 
 ## The host (`src/`)
 

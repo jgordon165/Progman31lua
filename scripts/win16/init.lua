@@ -64,6 +64,12 @@ function win16.init(cfg)
     local task = kernel.startTask(inst, {path = "C:\\WINDOWS\\PROGMAN.EXE", cmdShow = 1, cmdLine = ""})
     user.setTask(task, mod)
     state.task = task
+    if not require("win16.defaults").hasGroups() and not cfg.opts["no-setup"] then
+        user.idle = function()
+            require("win16.setup").start()
+            return true
+        end
+    end
 end
 
 function win16.run()
