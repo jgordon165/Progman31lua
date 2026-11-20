@@ -348,6 +348,7 @@ def("GDI", 34, "BitBlt", "h i i i i h i i l", function(hdst, x, y, w, h, hsrc, s
     local text, bk = d.text, d.bk
     if not smono and dmono then bk = s.bk end
     fb.bitblt(d.surface, x + d.ox, y + d.oy, w, h, s.surface, sx + s.ox, sy + s.oy, r3, b, text, bk)
+    if gdi.onImage then gdi.onImage(d, x, y, w, h) end
     return 1
 end)
 
@@ -518,6 +519,7 @@ function gdi.drawIcon(dc, x, y, lin, dw, dh)
     if not s then return false end
     if not useClip(dc) then return true end
     dw, dh = dw or s.w, dh or s.h
+    if gdi.onImage then gdi.onImage(dc, x, y, dw, dh) end
     if dw == s.w and dh == s.h then
         fb.bitblt(dc.surface, x + dc.ox, y + dc.oy, s.w, s.h, s["and"], 0, 0, 0x88, 0, 0, 0xFFFFFF)
         useClip(dc)

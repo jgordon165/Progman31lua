@@ -86,7 +86,11 @@ end
 
 -- Converts a 24/32-bit or palettized DIB icon to the internal 4-bit format.
 local function convert(dib, gdi)
-    if dib:sub(1, 4) == "\137PNG" then return nil end
+    if dib:sub(1, 4) == "\137PNG" then
+        -- Vista-style icons are PNG images
+        dib = require("win16.png").toIconDib(dib)
+        if not dib then return nil end
+    end
     local hsize = string.unpack("<I4", dib, 1)
     if hsize ~= 40 then return nil end
     local w, h2, _, bpp = string.unpack("<i4i4I2I2", dib, 5)
