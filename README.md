@@ -43,7 +43,10 @@ git-ignored, and release packages are checked for them.
   (reduced to Windows 3.1's 16 colours).
 - **The look**: the window frames, buttons, arrows and check boxes come from
   your VGA display driver; the System and MS Sans Serif fonts from your
-  `.FON` files; the startup screen is your `VGALOGO.RLE`.
+  `.FON` files. The startup screen is your `VGALOGO.RLE` on black,
+  rebranded as it loads: "WINRETRO, Version 3.2", with RETRO in Microsoft
+  Works' box colours and no copyright lines. The letters are the logo's own
+  (`scripts/logo.lua`); any other logo file is shown as it is.
 - **As a modern app**: the host window is Program Manager's frame. Its
   caption is the window's title bar, and resizing the window resizes
   Program Manager. `--desktop` shows the whole Windows 3.1 desktop instead.
