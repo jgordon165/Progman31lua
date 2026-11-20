@@ -64,9 +64,18 @@ function win16.init(cfg)
     local task = kernel.startTask(inst, {path = "C:\\WINDOWS\\PROGMAN.EXE", cmdShow = 1, cmdLine = ""})
     user.setTask(task, mod)
     state.task = task
-    if not require("win16.defaults").hasGroups() and not cfg.opts["no-setup"] then
+    local games = require("win16.games")
+    if games.init(cfg.opts.games) then host.log("Games: " .. games.hostDir()) end
+    if not require("win16.defaults").hasGroups() then
+        if not cfg.opts["no-setup"] then
+            user.idle = function()
+                require("win16.setup").start()
+                return true
+            end
+        end
+    elseif games.hostDir() then
         user.idle = function()
-            require("win16.setup").start()
+            games.sync()
             return true
         end
     end

@@ -5,6 +5,10 @@
 --                             fall back to the Windows 3.1 files (--data):
 --                             C:\WINDOWS\NOTEPAD.EXE comes from the setup
 --                             disk's NOTEPAD.EX_, expanded, read-only.
+--   mounted folders        -> a host folder shown under a DOS path
+--                             (C:\WINDOWS\GAMES is the games folder beside
+--                             the program), long names as 8.3 aliases
+--                             (MEGARA~1.LNK) as Windows 95 makes them
 --   other paths            -> the real drives on Windows (C:\Program Files\...
 --                             is the real one); elsewhere C:\ is the home folder.
 --
@@ -67,6 +71,61 @@ local function findCi(dir, name)
 end
 dosfs.findCi = findCi
 
+-- ---- mounted folders ------------------------------------------------------------
+
+local mounts = {}   -- {dos = "C:\\WINDOWS\\GAMES", host = "/.../games"}
+
+function dosfs.mount(dos, hostDir)
+    local full = dosfs.full(dos)
+    for i = #mounts, 1, -1 do if mounts[i].dos == full then table.remove(mounts, i) end end
+    if hostDir then mounts[#mounts + 1] = {dos = full, host = hostDir} end
+end
+
+
+-- The 8.3 names of a host folder's entries: returns alias -> entry and an
+-- array of {alias=, entry=} in name order. A name that is already 8.3 is
+-- its own alias; others are BASE~N.EXT.
+function dosfs.shortNames(dir)
+    local list = host.list(dir) or {}
+    table.sort(list, function(a, b) return a.name:upper() < b.name:upper() end)
+    local byAlias, out = {}, {}
+    local pending = {}
+    for _, e in ipairs(list) do
+        local up = e.name:upper()
+        local b, x = up:match("^([^.]+)%.?([^.]*)$")
+        if b and #b <= 8 and #x <= 3 and not (b .. x):find("[^%w_!#%$%%&'%(%)@%^`{}~%-]") and not byAlias[up] then
+            byAlias[up] = e
+            out[#out + 1] = {alias = up, entry = e}
+        else
+            pending[#pending + 1] = e
+        end
+    end
+    for _, e in ipairs(pending) do
+        local up = e.name:upper()
+        local ext = up:match("%.([^.]*)$") or ""
+        local base = ext ~= "" and up:sub(1, #up - #ext - 1) or up
+        base = base:gsub("[^%w_!#%$%%&'%(%)@%^`{}~%-]", "")
+        ext = ext:gsub("[^%w_!#%$%%&'%(%)@%^`{}~%-]", ""):sub(1, 3)
+        if base == "" then base = "_" end
+        local alias
+        for n = 1, 99999 do
+            local tail = "~" .. n
+            alias = base:sub(1, 8 - #tail) .. tail .. (ext ~= "" and ("." .. ext) or "")
+            if not byAlias[alias] then break end
+        end
+        byAlias[alias] = e
+        out[#out + 1] = {alias = alias, entry = e}
+    end
+    table.sort(out, function(a, b) return a.entry.name:upper() < b.entry.name:upper() end)
+    return byAlias, out
+end
+
+local function mountOf(full)
+    for _, m in ipairs(mounts) do
+        if full == m.dos or full:sub(1, #m.dos + 1) == m.dos .. "\\" then return m end
+    end
+end
+
 local function underWindows(full)
     local w = dosfs.windows
     return full == w or full:sub(1, #w + 1) == w .. "\\"
@@ -77,6 +136,15 @@ end
 function dosfs.hostPath(dos)
     local full = dosfs.full(dos)
     local dir, rel
+    local m = mountOf(full)
+    if m then
+        dir = m.host
+        for part in full:sub(#m.dos + 2):gmatch("[^\\]+") do
+            local e = dosfs.shortNames(dir)[part]
+            dir = e and (dir .. sep .. e.name) or findCi(dir, part) or (dir .. sep .. part)
+        end
+        return dir
+    end
     if underWindows(full) then
         dir, rel = windowsHost, full:sub(#dosfs.windows + 2)
     elseif isWindows then
@@ -211,6 +279,7 @@ function dosfs.find(pattern)
     if dir:sub(-1) == ":" then dir = dir .. "\\" end
     local hp = dosfs.hostPath(dir)
     local out, seen = {}, {}
+    local mounted = mountOf(dir)
     local function match(name)
         local n, e = name:match("^([^.]*)%.?(.*)$")
         local sn, se = spec:match("^([^.]*)%.?(.*)$")
@@ -226,14 +295,20 @@ function dosfs.find(pattern)
         end
         return m(n, sn) and m(e, se)
     end
-    for _, e in ipairs(hp and host.list(hp) or {}) do
+    local entries = hp and host.list(hp) or {}
+    if mounted and hp then
+        local _, names = dosfs.shortNames(hp)
+        entries = {}
+        for _, n in ipairs(names) do entries[#entries + 1] = {name = n.alias, dir = n.entry.dir, size = n.entry.size} end
+    end
+    for _, e in ipairs(entries) do
         local up = e.name:upper()
         if #up <= 12 and match(up) then
             out[#out + 1] = {name = up, dir = e.dir, size = e.size}
             seen[up] = true
         end
     end
-    if underWindows(dir .. "\\X") and dataDir then
+    if not mounted and underWindows(dir .. "\\X") and dataDir then
         for _, e in ipairs(host.list(dataDir) or {}) do
             local up = e.name:upper()
             if up:sub(-1) == "_" and not e.dir then

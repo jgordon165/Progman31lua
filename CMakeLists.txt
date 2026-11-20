@@ -108,6 +108,23 @@ if(PROGMAN31LUA_TESTS)
         add_test(NAME progman COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
                  --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-home --fresh
                  --test ${CMAKE_SOURCE_DIR}/tests/lua/test_progman.lua)
+        # the Games group from a games folder: two Program Manager runs per home
+        foreach(phase setup sync plain upgrade)
+            if(phase STREQUAL "setup" OR phase STREQUAL "sync")
+                set(home ${CMAKE_BINARY_DIR}/test-games-1)
+            else()
+                set(home ${CMAKE_BINARY_DIR}/test-games-2)
+            endif()
+            set(fresh "")
+            if(phase STREQUAL "setup" OR phase STREQUAL "plain")
+                set(fresh --fresh)
+            endif()
+            add_test(NAME games-${phase} COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
+                     --data $ENV{PROGMAN31LUA_DATA} --home ${home} ${fresh} --phase ${phase}
+                     --test ${CMAKE_SOURCE_DIR}/tests/lua/test_games.lua)
+        endforeach()
+        set_tests_properties(games-sync PROPERTIES DEPENDS games-setup)
+        set_tests_properties(games-upgrade PROPERTIES DEPENDS games-plain)
     endif()
 endif()
 
@@ -115,3 +132,4 @@ endif()
 install(TARGETS progman31lua RUNTIME DESTINATION . COMPONENT game)
 install(DIRECTORY scripts DESTINATION . COMPONENT game)
 install(FILES README.md DESTINATION . COMPONENT game)
+install(FILES games/README.txt DESTINATION games COMPONENT game)
