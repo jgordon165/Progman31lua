@@ -7,6 +7,8 @@
 --                       and WINDOWS folder.
 --   --home <folder>     where the emulated C:\WINDOWS lives (PROGMAN.INI, the
 --                       .GRP files). Default: the per-user app data folder.
+--   --games <folder>    the folder the Games group shows (default: "games"
+--                       beside the program)
 --   --fresh             start from an empty home (tests)
 --   --screen WxH        the size of the Program Manager window (default 800x600)
 --   --desktop           show the whole Windows 3.1 desktop instead of just

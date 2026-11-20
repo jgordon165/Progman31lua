@@ -41,6 +41,18 @@ git-ignored, and release packages are checked for them.
   when it's installed beside Progman31lua. Items you add that point at modern
   programs or documents start them directly, and show their own icons
   (reduced to Windows 3.1's 16 colours).
+- **Your games**: the Games group shows the `games` folder beside the
+  program. Put a folder in it for each game with a shortcut inside
+  (`games\Raptor\Raptor.lnk`); Windows shortcuts (`.lnk`) and Internet
+  shortcuts (`.url`, as Steam makes them) up to four folders down each
+  become an item, named after the shortcut and with its icon, and running
+  the item opens the shortcut. Program Manager sees the folder as
+  `C:\WINDOWS\GAMES`, long names as 8.3 aliases
+  (`C:\WINDOWS\GAMES\ONEMUS~1\ONEMUS~1.LNK`). Each start brings the group
+  up to date over DDE (`[DeleteItem(...)]`, `[AddItem(...)]`): items for
+  shortcuts that are gone are removed, new ones added, and items you add by
+  hand are left alone. With a games folder, Setup's Solitaire and
+  Minesweeper make way for it; without one, the Games group is Setup's.
 - **The look**: the window frames, buttons, arrows and check boxes come from
   your VGA display driver; the System and MS Sans Serif fonts from your
   `.FON` files. The startup screen is your `VGALOGO.RLE` on black,
@@ -83,6 +95,7 @@ root of each drive (so a mounted Windows 3.1 CD or disk image is found).
 |---|---|
 | `--data <folder>` | your Windows 3.1 files (installed folder or setup disks) |
 | `--home <folder>` | where Program Manager's `C:\WINDOWS` lives (`PROGMAN.INI`, the `.GRP` group files); default: your app data folder |
+| `--games <folder>` | the folder the Games group shows; default: `games` beside the program |
 | `--screen WxH` | window size (default 800x600) |
 | `--no-logo` | skip the startup screen |
 | `--desktop` | the whole Windows 3.1 desktop instead of just Program Manager |

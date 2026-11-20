@@ -52,3 +52,7 @@ __pycache__/
 stage/
 dist/
 .deps/
+
+# Your own shortcuts in the games folder
+games/*
+!games/README.txt
