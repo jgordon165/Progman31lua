@@ -36,9 +36,9 @@ logo.FOOTER_BASELINE = 376
 -- the rest (joined) on a straight line above, level with the initial's top
 logo.SCRIPT_INITIAL_HEIGHT = 34 -- pixels, the initial's capital height
 logo.SCRIPT_REST_HEIGHT = 17    -- pixels, the rest's capital height
-logo.SCRIPT_REST_GAP = 2        -- between the initial and the rest
+logo.SCRIPT_REST_GAP = -1       -- between the initial and the rest
 logo.SCRIPT_PEN = 3             -- stroke thickness
-logo.FOOTER_GAP = nil           -- space between the footer's pieces (nil: as wide as fits)
+logo.FOOTER_GAP = 5             -- space between the footer's pieces (nil: as wide as fits)
 logo.GOLD = {base = 0xD9A82E, light = 0xFFEE99, dark = 0x6B4A08}
 
 local function new(w, h)
