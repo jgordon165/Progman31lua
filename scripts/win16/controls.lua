@@ -324,10 +324,24 @@ local function staticProc(hwnd, msg, wp, lp)
                 fillc(dc, 0, 0, 1, ch, col); fillc(dc, cw - 1, 0, 1, ch, col)
             end
         else
-            user.fillRect(dc, {0, 0, cw, ch}, bg)
             local fmt = (kind == 1 and 1) or (kind == 2 and 2) or 0
             if kind == SS_SIMPLE or kind == SS_LEFTNOWORDWRAP then fmt = 0x20 else fmt = fmt | 0x10 end
             if w.style & SS_NOPREFIX ~= 0 then fmt = fmt | 0x800 end
+            -- only the text's own area is painted (a control placed over the
+            -- rest of a wide static stays visible), and what the last text took
+            local r = {0, 0, cw, ch}
+            local h, rr = user.drawText(dc, w.text, r, fmt | 0x400)    -- DT_CALCRECT
+            rr = rr or r
+            local tw = math.min(rr[3] - rr[1], cw)
+            local x0 = (kind == 1) and (cw - tw) // 2 or (kind == 2) and (cw - tw) or 0
+            local area = {x0, 0, x0 + tw + 1, math.min(h or ch, ch)}
+            local fill = area
+            if w.textArea then
+                local a = w.textArea
+                fill = {math.min(a[1], area[1]), 0, math.max(a[3], area[3]), math.max(a[4], area[4])}
+            end
+            user.fillRect(dc, fill, bg)
+            w.textArea = area
             dc.bkMode = 1
             if w.disabled then dc.text = C[COLOR.GRAYTEXT] end
             user.drawText(dc, w.text, {0, 0, cw, ch}, fmt | 0x40)
