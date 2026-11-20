@@ -45,7 +45,8 @@ git-ignored, and release packages are checked for them.
   your VGA display driver; the System and MS Sans Serif fonts from your
   `.FON` files. The startup screen is your `VGALOGO.RLE` on black,
   rebranded as it loads: "WINRETRO, Version 3.2", with RETRO in Microsoft
-  Works' box colours and no copyright lines. The letters are the logo's own
+  Works' box colours, and "WITH FATALS ENTERTAINMENT PACK" where the
+  copyright lines were. The letters are the logo's own
   (`scripts/logo.lua`); any other logo file is shown as it is.
 - **As a modern app**: the host window is Program Manager's frame. Its
   caption is the window's title bar, and resizing the window resizes

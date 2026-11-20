@@ -24,6 +24,12 @@ local CUT = 158          -- everything right of WIN's N is replaced
 -- R E T R O as W o r k s on the Microsoft Works box: pink, teal, lavender, magenta, orange
 logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
 
+-- the line under the version, in the copyright lines' place and style
+-- (plain black small serif): MS Serif at this point size
+logo.FOOTER = "WITH FATALS ENTERTAINMENT PACK"
+logo.FOOTER_POINTS = 10
+logo.FOOTER_TOP = 366
+
 local function new(w, h)
     return {w = w, h = h, px = {}}
 end
@@ -179,24 +185,45 @@ local function paste(img, g, x, yBottom, color)
     end
 end
 
--- The ink of the "2" in MS Serif, scaled to `height` rows.
-local function serifTwo(fontBytes, height)
+-- Text in MS Serif (the size nearest `points`) as a letter-like ink mask.
+local function serifText(fontBytes, points, text)
     if not fontBytes then return nil end
     local best
     for _, b in ipairs(fontBytes) do
         local fid, m = fb.font(b)
-        if fid and (not best or math.abs(m.points - 18) < math.abs(best.m.points - 18)) then best = {fid = fid, m = m} end
+        if fid and (not best or math.abs(m.points - points) < math.abs(best.m.points - points)) then best = {fid = fid, m = m} end
     end
     if not best then return nil end
-    local sid = fb.new(48, 48, true)
+    local tw = fb.text_width(best.fid, text, false) + 8
+    local th = best.m.height + 8
+    local sid = fb.new(tw, th, true)
     fb.clip(nil)
-    fb.patblt(sid, 0, 0, 48, 48, 0xFF, 0)
-    fb.text(sid, best.fid, 4, 4, "2", 0, 0xFFFFFF, false, false, false)
-    local tmp = new(48, 48)
-    for y = 0, 47 do for x = 0, 47 do tmp.px[y * 48 + x] = (fb.pixel(sid, x, y) == 0) and BLACK or BG end end
+    fb.patblt(sid, 0, 0, tw, th, 0xFF, 0)
+    fb.text(sid, best.fid, 4, 4, text, 0, 0xFFFFFF, false, false, false)
+    local tmp = new(tw, th)
+    for y = 0, th - 1 do for x = 0, tw - 1 do tmp.px[y * tw + x] = (fb.pixel(sid, x, y) == 0) and BLACK or BG end end
     fb.free(sid)
-    local g = grab(tmp, 0, 0, 47, 47)
-    if g.w <= 0 then return nil end
+    -- all of it (every letter), not just the largest shape
+    local g = {w = 0, h = 0, pix = {}}
+    local minx, miny, maxx, maxy = math.huge, math.huge, -1, -1
+    for y = 0, th - 1 do for x = 0, tw - 1 do
+        if tmp.px[y * tw + x] == BLACK then
+            minx, miny = math.min(minx, x), math.min(miny, y)
+            maxx, maxy = math.max(maxx, x), math.max(maxy, y)
+        end
+    end end
+    if maxx < 0 then return nil end
+    for y = miny, maxy do for x = minx, maxx do
+        if tmp.px[y * tw + x] == BLACK then g.pix[(y - miny) * 1000 + (x - minx)] = BLACK end
+    end end
+    g.w, g.h = maxx - minx + 1, maxy - miny + 1
+    return g
+end
+
+-- The ink of the "2" in MS Serif, scaled to `height` rows.
+local function serifTwo(fontBytes, height)
+    local g = serifText(fontBytes, 18, "2")
+    if not g then return nil end
     return scale(g, height / g.h)
 end
 
@@ -238,8 +265,13 @@ function logo.rebrand(id, w, h, fontBytes)
     if two then paste(img, two, 221, 332) end
     addShadows(img, 110, 308, 245, 338, 2)
 
-    -- no copyright lines
+    -- no copyright lines; the footer in their place, centred on the panel
     erase(img, 55, 358, 300, 395)
+    local footer = logo.FOOTER and logo.FOOTER ~= "" and serifText(fontBytes, logo.FOOTER_POINTS, logo.FOOTER)
+    if footer then
+        local fx = math.max(20, (w - footer.w) // 2)
+        paste(img, footer, fx, logo.FOOTER_TOP + footer.h - 1)
+    end
 
     -- write back what changed
     fb.clip(nil)
