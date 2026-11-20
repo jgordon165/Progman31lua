@@ -430,6 +430,14 @@ function defwnd.proc(hwnd, msg, wp, lp)
     elseif msg == WM.NCHITTEST then
         local x, y = api.unpt(lp)
         return defwnd.hitTest(w, x, y)
+    elseif msg == WM.RBUTTONUP then
+        -- not in Windows 3.1: a hook for host context menus
+        if user.contextMenu then
+            local x, y = api.unpt(lp)
+            local ox, oy = user.clientOrigin(w)
+            user.contextMenu(w, x + ox, y + oy)
+        end
+        return 0
     elseif msg == WM.NCLBUTTONDOWN then
         local x, y = api.unpt(lp)
         if wp == HT.CAPTION then

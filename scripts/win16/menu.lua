@@ -867,5 +867,11 @@ def("USER", 416, "TrackPopupMenu", "h w i i i h p", function(h, flags, x, y, _, 
     return 1
 end)
 
+-- A popup menu at screen x, y whose commands go to owner window w.
+function menu.popup(h, w, x, y)
+    local t = {owner = w, popupRoot = h}
+    deliver(t, track(t, {popup = true, x = x, y = y, mouse = true}))
+end
+
 user.menu = menu
 return menu

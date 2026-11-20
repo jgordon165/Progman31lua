@@ -118,7 +118,8 @@ local function dirOf(p) return p:match("^(.*)[\\/][^\\/]*$") or "." end
 local function absolute(p, base)
     if p == "" then return nil end
     if p:match("^%a:[\\/]") or p:match("^[\\/]") then return p end
-    return base .. sep .. p
+    if sep == "/" then p = p:gsub("\\", "/") end
+    return base .. sep .. p:gsub("^%.[\\/]", "")
 end
 
 -- Parses a Windows shortcut (.lnk): returns {target=, icon=, iconIndex=}
