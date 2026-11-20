@@ -28,14 +28,17 @@ logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
 -- (plain black small serif): MS Serif at this point size
 -- (plain black small serif): MS Serif at this point size; FOOTER_SCRIPT is
 -- set apart in raised gold letters in Windows 3.1's Script font (SCRIPT.FON)
-logo.FOOTER = {"WITH ", "fatals", " ENTERTAINMENT PACK"}
+logo.FOOTER = {"WITH ", "Fatals", " ENTERTAINMENT PACK"}
 logo.FOOTER_SCRIPT = 2          -- which part is in script
 logo.FOOTER_POINTS = 10
 logo.FOOTER_BASELINE = 376
-logo.SCRIPT_CAP_HEIGHT = 24     -- pixels
+-- the script word: its first letter big and upright on the footer line,
+-- the rest (joined) on a straight line above, level with the initial's top
+logo.SCRIPT_INITIAL_HEIGHT = 34 -- pixels, the initial's capital height
+logo.SCRIPT_REST_HEIGHT = 17    -- pixels, the rest's capital height
+logo.SCRIPT_REST_GAP = 2        -- between the initial and the rest
 logo.SCRIPT_PEN = 3             -- stroke thickness
-logo.SCRIPT_ANGLE = 32          -- degrees, rising to the right
-logo.FOOTER_GAP = nil           -- space either side of the script word (nil: as wide as fits)
+logo.FOOTER_GAP = nil           -- space between the footer's pieces (nil: as wide as fits)
 logo.GOLD = {base = 0xD9A82E, light = 0xFFEE99, dark = 0x6B4A08}
 
 local function new(w, h)
@@ -432,34 +435,35 @@ function logo.rebrand(id, w, h, fontBytes, scriptBytes)
 
     -- no copyright lines; the footer in their place, centred on the panel
     erase(img, 55, 358, 300, 395)
-    -- WITH / fatals / ENTERTAINMENT PACK: the script word tilted, the gaps on
-    -- both sides of it equal, the whole line centred; the tilted word's
-    -- middle on the middle of the capitals
+    -- WITH / F / ENTERTAINMENT PACK on the footer line, evenly spaced and
+    -- centred; "atals" above it, starting just right of the F, its top level
+    -- with the F's top
     local parts = type(logo.FOOTER) == "table" and logo.FOOTER or {logo.FOOTER}
     local script = scriptBytes and vectorFont(scriptBytes)
     local pieces = {}
-    local inkW = 0
+    local rest
     for i, text in ipairs(parts) do
         local trimmed = text:gsub("^%s+", ""):gsub("%s+$", "")
         local p
         if i == logo.FOOTER_SCRIPT and script then
-            p = {g = strokeText(script, trimmed, logo.SCRIPT_CAP_HEIGHT, logo.SCRIPT_PEN, logo.SCRIPT_ANGLE), raised = true}
+            p = {g = strokeText(script, trimmed:sub(1, 1), logo.SCRIPT_INITIAL_HEIGHT, logo.SCRIPT_PEN), raised = true}
+            p.top = logo.FOOTER_BASELINE - p.g.baseline
+            if #trimmed > 1 then
+                rest = strokeText(script, trimmed:sub(2), logo.SCRIPT_REST_HEIGHT, logo.SCRIPT_PEN)
+                p.rest = rest
+            end
         elseif trimmed ~= "" then
             p = {g = serifText(fontBytes, logo.FOOTER_POINTS, trimmed)}
         end
-        if p and p.g then
-            pieces[#pieces + 1] = p
-            inkW = inkW + p.g.w
-        end
+        if p and p.g then pieces[#pieces + 1] = p end
     end
-    -- the capitals' band: where the gaps are measured, so they look even
+    -- the gaps are measured along the line of capitals (a script letter's
+    -- flourishes above and below it don't count), so they look even
     local capH = 8
-    local midY = logo.FOOTER_BASELINE - capH // 2
-    local bandTop, bandBottom = logo.FOOTER_BASELINE - capH - 10, logo.FOOTER_BASELINE + 10
+    local bandTop, bandBottom = logo.FOOTER_BASELINE - capH - 4, logo.FOOTER_BASELINE + 4
     for _, p in ipairs(pieces) do
         p.left, p.right = 0, p.g.w - 1
         if p.raised then
-            p.top = midY - p.g.h // 2
             local lo, hi = math.huge, -1
             for k in pairs(p.g.pix) do
                 local v, u = k // 1000, k % 1000
@@ -470,7 +474,6 @@ function logo.rebrand(id, w, h, fontBytes, scriptBytes)
         end
         p.vis = p.right - p.left + 1
     end
-    -- equal gaps between the pieces as they meet the line, the line centred
     local visW = 0
     for _, p in ipairs(pieces) do visW = visW + p.vis end
     local room = 334 - 20 - 16
@@ -481,6 +484,11 @@ function logo.rebrand(id, w, h, fontBytes, scriptBytes)
         local x = fx - p.left
         if p.raised then
             pasteRaised(img, p.g, x, p.top, logo.GOLD)
+            if p.rest then
+                -- not joined to the initial: a small gap after its right edge
+                local rx = math.min(x + p.g.w + logo.SCRIPT_REST_GAP, 334 - 4 - p.rest.w)
+                pasteRaised(img, p.rest, rx, p.top, logo.GOLD)
+            end
         else
             paste(img, p.g, x, logo.FOOTER_BASELINE)
         end
