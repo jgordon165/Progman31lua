@@ -47,14 +47,11 @@ function shell.association(path)
     return (v:match("^(%S+)"))
 end
 
--- Icons in a file: returns count, and a function index -> HICON.
-local function iconsOf(path)
-    local full = shell.resolve(path)
-    if not full then return nil end
-    local data = dosfs.read(full)
-    if not data then return nil end
+-- Icons in a file's bytes: returns count, and a function index -> HICON
+-- (false: not a program or icon file).
+local function iconsOfData(data, name)
     if data:sub(1, 2) == "MZ" then
-        local m = ne.parse(data, full)
+        local m = ne.parse(data, name)
         if m then
             local groups = res.iconGroups(m)
             return #groups, function(i)
@@ -71,11 +68,55 @@ local function iconsOf(path)
         end
         return 0, function() return nil end
     end
-    local h, n = res.iconFromIco(data, 0)
-    if n and n > 0 then
-        return n, function(i) return i == 0 and (res.iconFromIco(data, 0)) or nil end
+    if #data >= 6 and string.unpack("<I2I2", data, 1) == 0 and string.unpack("<I2", data, 3) == 1 then
+        return 1, function(i)
+            if i ~= 0 then return nil end
+            local bytes = pe.icoBytes(data, gdi)
+            return bytes and res.newIcon(bytes) or (res.iconFromIco(data, 0))
+        end
     end
     return false
+end
+
+-- A shortcut's one icon: the one it names, else its target's.
+local function iconsOfShortcut(hostPath)
+    local sources = require("win16.games").iconSources(hostPath)
+    return 1, function(i)
+        if i ~= 0 then return nil end
+        for _, src in ipairs(sources) do
+            -- (a huge single-file game isn't read whole just for its icon)
+            local st = host.stat(src.path)
+            local data = st and (st.size or 0) <= 256 * 1024 * 1024 and host.read(src.path, false)
+            local n, get
+            if data then n, get = iconsOfData(data, src.path:match("([^\\/]+)$")) end
+            if n and n > 0 then
+                local idx = src.index or 0
+                local h
+                if idx < 0 and data:sub(1, 2) == "MZ" and pe.isPE(data) then
+                    local bytes = pe.iconBytes(data, idx, gdi)
+                    h = bytes and res.newIcon(bytes)
+                else
+                    h = get(idx >= 0 and idx < n and idx or 0)
+                end
+                if h then return h end
+            end
+        end
+        return nil
+    end
+end
+
+-- Icons in a file: returns count, and a function index -> HICON.
+local function iconsOf(path)
+    local full = shell.resolve(path)
+    if not full then return nil end
+    local ext = (full:match("%.([^.\\]+)$") or "")
+    if ext == "LNK" or ext == "URL" then
+        local hp = dosfs.hostFile(full)
+        if hp then return iconsOfShortcut(hp) end
+    end
+    local data = dosfs.read(full)
+    if not data then return nil end
+    return iconsOfData(data, full)
 end
 
 function shell.extractIcon(path, index)
@@ -151,7 +192,9 @@ def("SHELL", 21, "FindExecutable", "s s p", function(file, dir, result)
     local full = shell.resolve(file)
     if not full then return 2 end
     local exe = full
-    if not full:upper():match("%.EXE$") and not full:upper():match("%.COM$") then
+    -- shortcuts start themselves (and carry their own icons)
+    local ext = full:upper():match("%.(%w+)$")
+    if ext ~= "EXE" and ext ~= "COM" and ext ~= "LNK" and ext ~= "URL" then
         local a = shell.association(full)
         if not a then return 31 end
         exe = shell.resolve(a) or a

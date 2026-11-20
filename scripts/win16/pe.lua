@@ -131,30 +131,63 @@ local function convert(dib, gdi)
     return string.pack("<i2i2I2I2I2BB", 16, 16, 32, 32, 16, 1, 4) .. table.concat(andRows) .. table.concat(xorRows)
 end
 
--- The internal-format bytes of icon group `index` (0-based), or nil.
+pe.dibToIcon = convert
+
+-- The entries of an icon directory, best first: 32x32 first, then larger
+-- ones (scaled down) over smaller ones; deep colour preferred for quality.
+-- entry(i) returns width, height, bits per pixel, and its key.
+local function ranked(count, entry)
+    local list = {}
+    for i = 0, count - 1 do
+        local w, h, bits, key = entry(i)
+        w = w == 0 and 256 or w
+        local score = (w == 32 and 0 or (w > 32 and (w - 32) or (32 - w) * 4)) * 10 + ((bits or 0) >= 24 and 0 or 5)
+        if w <= 128 then list[#list + 1] = {score = score, key = key, i = i} end
+    end
+    table.sort(list, function(a, b) if a.score ~= b.score then return a.score < b.score end return a.i < b.i end)
+    return list
+end
+
+-- The internal-format bytes of icon group `index` (0-based; a negative
+-- index is a resource id, as in a shortcut's icon location), or nil.
 function pe.iconBytes(data, index, gdi)
     local r = resources(data)
     if not r then return nil end
     local groups = r.list(14)
-    local g = groups[index + 1]
+    local g
+    if index < 0 then
+        for _, e in ipairs(groups) do if e.id == -index then g = e end end
+    else
+        g = groups[index + 1]
+    end
     if not g then return nil end
     local dir = g.dir and r.leaf(g.off)
     if not dir or #dir < 6 then return nil end
     local count = u16(dir, 4)
-    local best, bscore
-    for i = 0, count - 1 do
+    for _, c in ipairs(ranked(count, function(i)
         local at = 6 + i * 14
-        local w, h = dir:byte(at + 1), dir:byte(at + 2)
-        local bits = u16(dir, at + 6)
-        local id = u16(dir, at + 12)
-        w = w == 0 and 256 or w
-        h = h == 0 and 256 or h
-        -- 32x32 best; then larger ones (scaled down) over smaller; deep colour preferred for quality
-        local score = (w == 32 and 0 or (w > 32 and (w - 32) or (32 - w) * 4)) * 10 + (bits >= 24 and 0 or 5)
-        if w <= 128 and (not bscore or score < bscore) then best, bscore = id, score end
+        return dir:byte(at + 1), dir:byte(at + 2), u16(dir, at + 6), u16(dir, at + 12)
+    end)) do
+        local dib = r.get(3, c.key)
+        local bytes = dib and convert(dib, gdi)
+        if bytes then return bytes end
     end
-    local dib = best and r.get(3, best)
-    return dib and convert(dib, gdi)
+end
+
+-- The internal-format bytes of the best icon in an .ICO file, or nil.
+function pe.icoBytes(data, gdi)
+    if #data < 6 then return nil end
+    local reserved, kind, count = string.unpack("<I2I2I2", data, 1)
+    if reserved ~= 0 or kind ~= 1 then return nil end
+    for _, c in ipairs(ranked(count, function(i)
+        local at = 6 + i * 16
+        if at + 16 > #data then return 999, 999, 0, nil end
+        return data:byte(at + 1), data:byte(at + 2), u16(data, at + 6), at
+    end)) do
+        local size, off = u32(data, c.key + 8), u32(data, c.key + 12)
+        local bytes = convert(data:sub(off + 1, off + size), gdi)
+        if bytes then return bytes end
+    end
 end
 
 return pe

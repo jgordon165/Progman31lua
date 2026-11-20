@@ -73,11 +73,22 @@ end
 function setup.commands()
     local inf = dosfs.read(dosfs.system .. "\\SETUP.INF")
     local groups = inf and fromInf(inf) or BUILTIN
+    -- with a games folder, the Games group is its shortcuts instead
+    local games = require("win16.games")
+    if games.hostDir() then
+        local items = {}
+        for _, w in ipairs(games.scan()) do items[#items + 1] = {w.name, w.command} end
+        local found = false
+        for i, g in ipairs(groups) do
+            if g.name:upper() == games.GROUP:upper() then groups[i] = {name = g.name, items = items}; found = true end
+        end
+        if not found then table.insert(groups, math.min(3, #groups + 1), {name = games.GROUP, items = items}) end
+    end
     local cmds = {}
     for _, g in ipairs(groups) do
         cmds[#cmds + 1] = "[CreateGroup(" .. g.name .. ")]"
         for _, it in ipairs(g.items) do
-            local args = it[2] .. "," .. it[1]
+            local args = it[2] .. "," .. games.arg(it[1])
             if it[3] then args = args .. "," .. it[3] .. "," .. (it[4] or "0") end
             cmds[#cmds + 1] = "[AddItem(" .. args .. ")]"
         end
@@ -90,10 +101,13 @@ function setup.commands()
     return cmds
 end
 
--- Runs the DDE conversation from a hidden window of our own, one command
--- per acknowledgement, while Program Manager's own message loop runs.
 function setup.start(done)
-    local cmds = setup.commands()
+    return setup.converse(setup.commands(), done)
+end
+
+-- Runs a DDE conversation from a hidden window of our own, one command
+-- per acknowledgement, while Program Manager's own message loop runs.
+function setup.converse(cmds, done)
     local state = {i = 0, server = nil}
     local client
     local function sendNext()
@@ -146,7 +160,7 @@ function setup.start(done)
         if done then done() end
         return false
     end
-    host.log(string.format("Setup: making Program Manager's groups (%d commands)", #cmds))
+    host.log(string.format("Setup: sending Program Manager %d commands", #cmds))
     sendNext()
     return true
 end
