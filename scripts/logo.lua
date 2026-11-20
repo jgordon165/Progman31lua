@@ -34,6 +34,8 @@ logo.FOOTER_POINTS = 10
 logo.FOOTER_BASELINE = 376
 logo.SCRIPT_CAP_HEIGHT = 24     -- pixels
 logo.SCRIPT_PEN = 3             -- stroke thickness
+logo.SCRIPT_ANGLE = 32          -- degrees, rising to the right
+logo.FOOTER_GAP = nil           -- space either side of the script word (nil: as wide as fits)
 logo.GOLD = {base = 0xD9A82E, light = 0xFFEE99, dark = 0x6B4A08}
 
 local function new(w, h)
@@ -282,7 +284,7 @@ end
 -- Text drawn with a round pen: a mask {w, h, pix, baseline}. Joined:
 -- where a letter's exit stroke doesn't already meet the next letter, a short
 -- stroke joins it to the nearest point of that letter, so the word is one line.
-local function strokeText(f, text, capHeight, pen)
+local function strokeText(f, text, capHeight, pen, angle)
     local s = capHeight / f.ascent
     local r = pen / 2
     -- every letter's strokes in font units, placed along the line
@@ -326,6 +328,18 @@ local function strokeText(f, text, capHeight, pen)
                 end
             end
             if bd and bd > 0.25 then strokes[#strokes + 1] = {ex, ey, bx, by} end
+        end
+    end
+    -- tilted: turned about the word's middle, rising to the right
+    if angle and angle ~= 0 then
+        local a = math.rad(angle)
+        local ca, sa = math.cos(a), math.sin(a)
+        local mx, my = cx / 2, f.ascent * 0.6
+        for _, st in ipairs(strokes) do
+            for j = 1, #st - 1, 2 do
+                local x, y = st[j] - mx, st[j + 1] - my
+                st[j], st[j + 1] = mx + x * ca + y * sa, my - x * sa + y * ca
+            end
         end
     end
     local pts = {}
@@ -418,33 +432,59 @@ function logo.rebrand(id, w, h, fontBytes, scriptBytes)
 
     -- no copyright lines; the footer in their place, centred on the panel
     erase(img, 55, 358, 300, 395)
+    -- WITH / fatals / ENTERTAINMENT PACK: the script word tilted, the gaps on
+    -- both sides of it equal, the whole line centred; the tilted word's
+    -- middle on the middle of the capitals
     local parts = type(logo.FOOTER) == "table" and logo.FOOTER or {logo.FOOTER}
     local script = scriptBytes and vectorFont(scriptBytes)
-    local pieces, total = {}, 0
+    local pieces = {}
+    local inkW = 0
     for i, text in ipairs(parts) do
+        local trimmed = text:gsub("^%s+", ""):gsub("%s+$", "")
         local p
         if i == logo.FOOTER_SCRIPT and script then
-            p = {g = strokeText(script, text, logo.SCRIPT_CAP_HEIGHT, logo.SCRIPT_PEN), raised = true}
-        else
-            local lead = #text:match("^ *") * 6
-            local trail = #text:match(" *$") * 6
-            p = {g = serifText(fontBytes, logo.FOOTER_POINTS, text), lead = lead, trail = trail}
+            p = {g = strokeText(script, trimmed, logo.SCRIPT_CAP_HEIGHT, logo.SCRIPT_PEN, logo.SCRIPT_ANGLE), raised = true}
+        elseif trimmed ~= "" then
+            p = {g = serifText(fontBytes, logo.FOOTER_POINTS, trimmed)}
         end
-        if p.g then
-            p.w = (p.lead or 0) + p.g.w + (p.trail or 0)
+        if p and p.g then
             pieces[#pieces + 1] = p
-            total = total + p.w
+            inkW = inkW + p.g.w
         end
     end
-    local fx = math.max(20, (w - total) // 2)
+    -- the capitals' band: where the gaps are measured, so they look even
+    local capH = 8
+    local midY = logo.FOOTER_BASELINE - capH // 2
+    local bandTop, bandBottom = logo.FOOTER_BASELINE - capH - 10, logo.FOOTER_BASELINE + 10
     for _, p in ipairs(pieces) do
-        local x = fx + (p.lead or 0)
+        p.left, p.right = 0, p.g.w - 1
         if p.raised then
-            pasteRaised(img, p.g, x, logo.FOOTER_BASELINE - p.g.baseline, logo.GOLD)
+            p.top = midY - p.g.h // 2
+            local lo, hi = math.huge, -1
+            for k in pairs(p.g.pix) do
+                local v, u = k // 1000, k % 1000
+                local y = p.top + v
+                if y >= bandTop and y <= bandBottom then lo, hi = math.min(lo, u), math.max(hi, u) end
+            end
+            if hi >= 0 then p.left, p.right = lo, hi end
+        end
+        p.vis = p.right - p.left + 1
+    end
+    -- equal gaps between the pieces as they meet the line, the line centred
+    local visW = 0
+    for _, p in ipairs(pieces) do visW = visW + p.vis end
+    local room = 334 - 20 - 16
+    local gaps = #pieces - 1
+    local gap = logo.FOOTER_GAP or (gaps > 0 and math.min(12, math.max(4, (room - visW) // gaps)) or 0)
+    local fx = (w - (visW + gap * gaps)) // 2
+    for _, p in ipairs(pieces) do
+        local x = fx - p.left
+        if p.raised then
+            pasteRaised(img, p.g, x, p.top, logo.GOLD)
         else
             paste(img, p.g, x, logo.FOOTER_BASELINE)
         end
-        fx = fx + p.w
+        fx = fx + p.vis + gap
     end
     -- write back what changed
     fb.clip(nil)
