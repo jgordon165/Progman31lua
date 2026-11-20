@@ -26,9 +26,15 @@ logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
 
 -- the line under the version, in the copyright lines' place and style
 -- (plain black small serif): MS Serif at this point size
-logo.FOOTER = "WITH FATALS ENTERTAINMENT PACK"
+-- (plain black small serif): MS Serif at this point size; FOOTER_SCRIPT is
+-- set apart in raised gold letters in Windows 3.1's Script font (SCRIPT.FON)
+logo.FOOTER = {"WITH ", "FATALS", " ENTERTAINMENT PACK"}
+logo.FOOTER_SCRIPT = 2          -- which part is in script
 logo.FOOTER_POINTS = 10
-logo.FOOTER_TOP = 366
+logo.FOOTER_BASELINE = 376
+logo.SCRIPT_CAP_HEIGHT = 24     -- pixels
+logo.SCRIPT_PEN = 3             -- stroke thickness
+logo.GOLD = {base = 0xD9A82E, light = 0xFFEE99, dark = 0x6B4A08}
 
 local function new(w, h)
     return {w = w, h = h, px = {}}
@@ -227,9 +233,116 @@ local function serifTwo(fontBytes, height)
     return scale(g, height / g.h)
 end
 
+-- ---- the Script font: a Windows vector font (strokes, not bitmaps) ----
+
+-- Parses a vector FNT: {ascent, height, first, glyphs[ch] = {width, strokes}}
+-- where strokes are polylines of (x, y) from the cell's top-left.
+local function vectorFont(data)
+    local version = string.unpack("<I2", data, 1)
+    local typ = string.unpack("<I2", data, 67)
+    if typ & 1 == 0 then return nil end
+    local ascent = string.unpack("<I2", data, 75)
+    local height = string.unpack("<I2", data, 89)
+    local first, last = data:byte(96), data:byte(97)
+    local bits = string.unpack("<I4", data, 114)
+    local tab = version == 0x100 and 117 or (version == 0x200 and 118 or 148)
+    local f = {ascent = ascent, height = height, glyphs = {}}
+    for c = first, last do
+        local e = tab + (c - first) * 4
+        local off, width = string.unpack("<I2I2", data, e + 1)
+        local nxt = string.unpack("<I2", data, e + 5)
+        local strokes, cur = {}, nil
+        local x, y, k, pen = 0, 0, bits + off + 1, true
+        local stop = bits + nxt
+        while k <= stop do
+            local a = string.unpack("b", data, k)
+            if a == -128 then
+                pen = false
+                k = k + 1
+            else
+                if k + 1 > stop then break end
+                local dy = string.unpack("b", data, k + 1)
+                k = k + 2
+                if pen then
+                    if not cur then cur = {x, y}; strokes[#strokes + 1] = cur end
+                    cur[#cur + 1] = x + a
+                    cur[#cur + 1] = y + dy
+                else
+                    cur = nil
+                end
+                x, y = x + a, y + dy
+                pen = true
+            end
+        end
+        f.glyphs[c] = {width = width, strokes = strokes}
+    end
+    return f
+end
+
+-- Text drawn with a round pen: a mask {w, h, pix, baseline}.
+local function strokeText(f, text, capHeight, pen)
+    local s = capHeight / f.ascent
+    local r = pen / 2
+    local pts = {}
+    local cx = 0
+    for i = 1, #text do
+        local g = f.glyphs[text:byte(i)]
+        if g then
+            for _, st in ipairs(g.strokes) do
+                for j = 1, #st - 3, 2 do
+                    local x0, y0, x1, y1 = (cx + st[j]) * s, st[j + 1] * s, (cx + st[j + 2]) * s, st[j + 3] * s
+                    local n = math.max(1, math.ceil(math.max(math.abs(x1 - x0), math.abs(y1 - y0)) * 2))
+                    for t = 0, n do
+                        pts[#pts + 1] = {x0 + (x1 - x0) * t / n, y0 + (y1 - y0) * t / n}
+                    end
+                end
+            end
+            cx = cx + g.width
+        end
+    end
+    local pix = {}
+    local minx, miny, maxx, maxy = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(pts) do
+        for yy = math.floor(p[2] - r), math.ceil(p[2] + r) do
+            for xx = math.floor(p[1] - r), math.ceil(p[1] + r) do
+                local dx, dy = xx + 0.5 - p[1], yy + 0.5 - p[2]
+                if dx * dx + dy * dy <= r * r + 0.25 then
+                    pix[(yy + 100) * 2000 + (xx + 100)] = true
+                    minx, miny = math.min(minx, xx), math.min(miny, yy)
+                    maxx, maxy = math.max(maxx, xx), math.max(maxy, yy)
+                end
+            end
+        end
+    end
+    local g = {w = maxx - minx + 1, h = maxy - miny + 1, pix = {}}
+    for k in pairs(pix) do
+        local y, x = k // 2000 - 100, k % 2000 - 100
+        g.pix[(y - miny) * 1000 + (x - minx)] = true
+    end
+    g.baseline = math.floor(f.ascent * s + 0.5) - miny   -- rows from the mask's top to the baseline
+    return g
+end
+
+-- Raised gold: lit from the top left, a dark edge bottom right, a drop shadow.
+local function pasteRaised(img, g, x, top, gold)
+    local function has(u, v) return g.pix[v * 1000 + u] end
+    for k in pairs(g.pix) do
+        local v, u = k // 1000, k % 1000
+        local sx, sy = x + u + 2, top + v + 2
+        if get(img, sx, sy) == BG then set(img, sx, sy, SHADOW) end
+    end
+    for k in pairs(g.pix) do
+        local v, u = k // 1000, k % 1000
+        local c = gold.base
+        if not has(u - 1, v - 1) or not has(u, v - 1) or not has(u - 1, v) then c = gold.light
+        elseif not has(u + 1, v + 1) or not has(u, v + 1) or not has(u + 1, v) then c = gold.dark end
+        set(img, x + u, top + v, c)
+    end
+end
+
 -- Edits the logo surface in place. Returns true when it was the standard
 -- logo and got rebranded.
-function logo.rebrand(id, w, h, fontBytes)
+function logo.rebrand(id, w, h, fontBytes, scriptBytes)
     if w ~= 355 or h ~= 425 then return false end
     local img = read(id, w, h)
     -- the standard picture's fingerprint: its black pixels in the two text areas
@@ -267,12 +380,34 @@ function logo.rebrand(id, w, h, fontBytes)
 
     -- no copyright lines; the footer in their place, centred on the panel
     erase(img, 55, 358, 300, 395)
-    local footer = logo.FOOTER and logo.FOOTER ~= "" and serifText(fontBytes, logo.FOOTER_POINTS, logo.FOOTER)
-    if footer then
-        local fx = math.max(20, (w - footer.w) // 2)
-        paste(img, footer, fx, logo.FOOTER_TOP + footer.h - 1)
+    local parts = type(logo.FOOTER) == "table" and logo.FOOTER or {logo.FOOTER}
+    local script = scriptBytes and vectorFont(scriptBytes)
+    local pieces, total = {}, 0
+    for i, text in ipairs(parts) do
+        local p
+        if i == logo.FOOTER_SCRIPT and script then
+            p = {g = strokeText(script, text, logo.SCRIPT_CAP_HEIGHT, logo.SCRIPT_PEN), raised = true}
+        else
+            local lead = #text:match("^ *") * 6
+            local trail = #text:match(" *$") * 6
+            p = {g = serifText(fontBytes, logo.FOOTER_POINTS, text), lead = lead, trail = trail}
+        end
+        if p.g then
+            p.w = (p.lead or 0) + p.g.w + (p.trail or 0)
+            pieces[#pieces + 1] = p
+            total = total + p.w
+        end
     end
-
+    local fx = math.max(20, (w - total) // 2)
+    for _, p in ipairs(pieces) do
+        local x = fx + (p.lead or 0)
+        if p.raised then
+            pasteRaised(img, p.g, x, logo.FOOTER_BASELINE - p.g.baseline, logo.GOLD)
+        else
+            paste(img, p.g, x, logo.FOOTER_BASELINE)
+        end
+        fx = fx + p.w
+    end
     -- write back what changed
     fb.clip(nil)
     for k, c in pairs(img.px) do

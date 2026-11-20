@@ -66,7 +66,15 @@ local function showLogo(data, shot)
     if m then
         for _, r in ipairs(m:resourcesOf(8)) do fonts[#fonts + 1] = m:resourceBytes(r) end
     end
-    local ok, err = pcall(require("logo").rebrand, id, w, h, fonts)
+    -- Script (SCRIPT.FON) for the footer's cursive word
+    local scriptFont
+    local sb = boot.dataFile(data, "SCRIPT.FON")
+    local sm = sb and require("recomp.ne").parse(sb, "SCRIPT.FON")
+    if sm then
+        local r = sm:resourcesOf(8)[1]
+        scriptFont = r and sm:resourceBytes(r)
+    end
+    local ok, err = pcall(require("logo").rebrand, id, w, h, fonts, scriptFont)
     if not ok then host.log("logo: " .. tostring(err)) end
     local sw, sh = fb.size(0)
     fb.clip(nil)
