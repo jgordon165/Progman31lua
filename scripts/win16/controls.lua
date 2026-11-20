@@ -251,10 +251,9 @@ local function buttonProc(hwnd, msg, wp, lp)
         return user.defwnd.proc(hwnd, msg, wp, lp)
     elseif msg == WM.SETFOCUS or msg == WM.KILLFOCUS then
         if msg == WM.KILLFOCUS and w.btnPressed then w.btnPressed = false end
+        -- (Windows 3.1 buttons send no notification for this: a WM_COMMAND
+        -- here reads as a click to a dialog, IDCANCEL closing it)
         user.invalidate(w, nil, true)
-        if t == BS_PUSH or t == BS_DEFPUSH or t == BS_OWNERDRAW then
-            notify(w, msg == WM.SETFOCUS and 6 or 7)  -- BN_SETFOCUS/BN_KILLFOCUS (3.1 sends these for owner-draw only)
-        end
         return 0
     elseif msg == WM.ENABLE then
         user.invalidate(w, nil, true)

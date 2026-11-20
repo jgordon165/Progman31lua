@@ -37,8 +37,8 @@ def("USER", 119, "GetMessagePos", ":l", function()
     return (((user.mouseY or 0) & 0xFFFF) << 16) | ((user.mouseX or 0) & 0xFFFF)
 end)
 def("USER", 249, "GetAsyncKeyState", "i", function(vk)
-    if vk == 1 then return user.buttons[user.swapped and 2 or 1] and 0x8000 or 0 end
-    if vk == 2 then return user.buttons[user.swapped and 1 or 2] and 0x8000 or 0 end
+    if vk == 1 then return user.buttons[1] and 0x8000 or 0 end
+    if vk == 2 then return user.buttons[2] and 0x8000 or 0 end
     if vk == 4 then return user.buttons[3] and 0x8000 or 0 end
     return user.keys[vk] and 0x8000 or 0
 end)
@@ -182,6 +182,10 @@ end
 
 function user.loadColors()
     local ini = profile.resolve(nil)
+    -- and the mouse settings Control Panel saved
+    local swap = profile.get(ini, "windows", "SwapMouseButtons")
+    user.swapped = swap ~= nil and (swap == "1" or swap:lower() == "yes" or swap:lower() == "true")
+    user.doubleClickTime = tonumber(profile.get(ini, "windows", "DoubleClickSpeed") or "") or 500
     for i, name in pairs(user.colorNames) do
         local v = profile.get(ini, "colors", name)
         local r, g, b = (v or ""):match("^%s*(%d+)%s+(%d+)%s+(%d+)")
@@ -200,7 +204,6 @@ def("USER", 181, "SetSysColors", "i p p:v", function(n, pIdx, pVal)
     user.colorsChanged()
 end)
 
-user.swapped = false
 def("USER", 186, "SwapMouseButton", "w", function(swap)
     local old = user.swapped
     user.swapped = swap ~= 0

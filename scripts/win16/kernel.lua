@@ -11,6 +11,7 @@ local def = api.def
 local rw, ww, rb, wb = mem.rw, mem.ww, mem.rb, mem.wb
 
 kernel.task = nil      -- {R=, inst=, hInstance=, psp=, cmdShow=, cmdLine=, path=}
+kernel.clockOffset = 0 -- seconds Windows' clock runs ahead of the host's (Date/Time)
 kernel.modules = {}    -- module name -> {handle=, name=, file=}
 
 -- ---- global memory: a handle is the selector -------------------------------------------
@@ -538,7 +539,7 @@ end)
 
 -- OpenFile(name, OFSTRUCT*, style). OFSTRUCT: cBytes, fFixedDisk, nErrCode,
 -- reserved[4], szPathName[128].
-def("KERNEL", 74, "OpenFile", "s p w", function(name, of, style)
+def("KERNEL", 74, "OpenFile", "s p w", function(name, of, style, R)
     local OF_PARSE, OF_DELETE, OF_EXIST, OF_CREATE, OF_REOPEN = 0x100, 0x200, 0x4000, 0x1000, 0x8000
     if style & OF_REOPEN ~= 0 and of then name = mem.cstr(of + 8) end
     if not name then return HFILE_ERROR end
@@ -912,11 +913,25 @@ local function dos(R)
         local clusters = math.min(free // 32768, 0xFFFF)
         R.ax = 64; R.bx = clusters; R.cx = 512; R.dx = 0xFFFF
     elseif ah == 0x2A then
-        local t = os.date("*t")
+        local t = os.date("*t", os.time() + kernel.clockOffset)
         R.cx = t.year; R.dx = (t.month << 8) | t.day; R.ax = (R.ax & 0xFF00) | (t.wday - 1)
     elseif ah == 0x2C then
-        local t = os.date("*t")
+        local t = os.date("*t", os.time() + kernel.clockOffset)
         R.cx = (t.hour << 8) | t.min; R.dx = (t.sec << 8)
+    elseif ah == 0x2B or ah == 0x2D then
+        -- setting the date or time (Control Panel's Date/Time): this machine's
+        -- clock is left alone; Windows here runs that far ahead or behind
+        local now = os.time()
+        local t = os.date("*t", now + kernel.clockOffset)
+        if ah == 0x2B then t.year, t.month, t.day = R.cx, R.dx >> 8, R.dx & 0xFF
+        else t.hour, t.min, t.sec = R.cx >> 8, R.cx & 0xFF, R.dx >> 8 end
+        local ok, want = pcall(os.time, t)
+        if ok and want then
+            kernel.clockOffset = want - now
+            R.ax = R.ax & 0xFF00
+        else
+            R.ax = (R.ax & 0xFF00) | 0xFF
+        end
     elseif ah == 0x44 then      -- ioctl: get device info: a file on drive C
         R.dx = 0x0002; setCarry(R, nil)
     elseif ah == 0x57 then      -- file date and time: get (AL=0) from the file, set (AL=1) accepted
@@ -948,13 +963,36 @@ end
 kernel.dos = dos
 cpu.ints[0x21] = dos
 
+-- The virtual devices 386 Enhanced asks for (VCD 0x0E, the COM ports;
+-- VPD 0x0F, the printer ports; SHELL 0x17): their protected-mode APIs
+-- answer as a machine whose ports are all free. The function is in DX:
+-- 0 asks for the version, VCD's 1 for the ports there are (COM1-COM4).
+local vxdApis = {}
+function kernel.vxdEntry(id)
+    if id ~= 0x0E and id ~= 0x0F and id ~= 0x17 then return 0 end
+    if not vxdApis[id] then
+        vxdApis[id] = api.farproc("VxD" .. id, ":v", function(R)
+            local fn = R.dx
+            if api.trace then host.log(string.format("  VxD %02X AX=%04X BX=%04X CX=%04X DX=%04X", id, R.ax, R.bx, R.cx, R.dx)) end
+            R.cf = false
+            if fn == 0 then R.ax = 0x030A
+            elseif id == 0x0E and fn == 1 then R.ax = 0x000F
+            else R.ax = 0 end
+        end)
+    end
+    return vxdApis[id]
+end
+
 -- INT 2Fh, the multiplex interrupt: Windows answers as itself (enhanced
 -- mode 3.10) and has no virtual devices to offer.
 cpu.ints[0x2F] = function(R)
     local ax = R.ax
+    if api.trace then host.log(string.format("  INT 2Fh AX=%04X BX=%04X", R.ax, R.bx)) end
     if ax == 0x1600 then R.ax = 0x0A03          -- enhanced mode, version 3.10
     elseif ax == 0x1683 then R.bx = 1           -- the system VM
-    elseif ax == 0x1684 then cpu.setseg(R, "es", 0); R.di = 0   -- no device API
+    elseif ax == 0x1684 then                    -- a virtual device's API entry point
+        local fp = kernel.vxdEntry(R.bx)
+        cpu.setseg(R, "es", fp >> 16); R.di = fp & 0xFFFF
     elseif ax == 0x1689 then -- kernel idle
     elseif (ax >> 8) == 0x16 then -- other Windows calls: nothing to report
     else R.ax = ax & 0xFF00 end                 -- no multiplex handler installed

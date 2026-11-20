@@ -1152,6 +1152,8 @@ function user.translateInput(ev)
         local x, y = user.mouseX, user.mouseY
         if ev.kind ~= "wheel" then x, y = ev.e[2], ev.e[3]; user.mouseX, user.mouseY = x, y end
         local button = ev.e[4]
+        -- Swap Left/Right Buttons (Control Panel's Mouse)
+        if user.swapped and (button == 1 or button == 2) then button = 3 - button end
         if ev.kind == "down" then user.buttons[button] = true elseif ev.kind == "up" then user.buttons[button] = false end
         if ev.kind == "wheel" then
             -- the wheel scrolls whatever's under the pointer that has a scroll bar

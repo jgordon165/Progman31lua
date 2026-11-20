@@ -98,7 +98,27 @@ function loader.load(mod, resolver, opts)
     end
     inst.stats = stats
 
-    -- exported prologues
+    -- exported prologues: a program's become nops (AX brings DS from
+    -- MakeProcInstance's thunk); a library's load its own DGROUP, as
+    -- Windows' loader makes them (`mov ax, DGROUP`)
+    if not opts.program and inst.dgroup then
+        local patched = 0
+        for _, e in pairs(mod.entries) do
+            if not e.const and e.seg ~= 0 and (e.flags & 1) ~= 0 then
+                local s = mod.segments[e.seg]
+                if s and not s.data then
+                    local at = inst.bases[e.seg] + e.off
+                    local b0, b1, b2 = mem.rb(at), mem.rb(at + 1), mem.rb(at + 2)
+                    if (b0 == 0x1E and b1 == 0x58 and b2 == 0x90) or (b0 == 0x8C and b1 == 0xD8 and b2 == 0x90) then
+                        mem.wb(at, 0xB8)
+                        mem.ww(at + 1, inst.dgroup)
+                        patched = patched + 1
+                    end
+                end
+            end
+        end
+        inst.stats.prologues = patched
+    end
     if opts.program then
         local patched = 0
         for _, e in pairs(mod.entries) do
