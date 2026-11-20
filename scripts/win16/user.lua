@@ -347,6 +347,8 @@ end
 
 function user.init(cfg, sys)
     user.cfg = cfg
+    if type(cfg.opts.script) == "string" then user.script = assert(loadfile(cfg.opts.script))()
+    elseif type(cfg.opts.script) == "table" then user.script = cfg.opts.script end
     user.appMode = not cfg.opts.desktop
     user.exitAfter = tonumber(cfg.opts["exit-after"])
     user.started = host.ticks()
@@ -806,7 +808,35 @@ function user.present()
 end
 
 -- Turns host events into raw input entries.
+-- Scripted input for headless runs (--script file.lua returning steps:
+-- {at = ms, ev = {host event}} | {at = ms, shot = "file.bmp"} | {at = ms, fn = function(user) end})
+local function runScript()
+    local now = host.ticks() - user.started
+    while user.script and user.script[1] and now >= user.script[1].at do
+        local st = table.remove(user.script, 1)
+        if st.ev then user.input[#user.input + 1] = {kind = st.ev[1], e = st.ev, t = host.ticks()} end
+        if st.shot then
+            user.dirty = true
+            user.present()
+            local saved = user.overlays
+            -- the overlays (open menus) belong in the picture: draw them once more
+            if #saved > 0 then
+                local base = {}
+                for _, o in ipairs(saved) do o.draw() end
+                fb.clip(nil)
+                fb.save_bmp(0, st.shot)
+                user.damage({{0, 0, user.desktop.w, user.desktop.h}})
+            else
+                fb.clip(nil)
+                fb.save_bmp(0, st.shot)
+            end
+        end
+        if st.fn then st.fn(user) end
+    end
+end
+
 function user.pumpHost(timeout)
+    if user.script then runScript() end
     local evs = host.pump(timeout or 0)
     for _, e in ipairs(evs) do
         local k = e[1]
@@ -817,7 +847,7 @@ function user.pumpHost(timeout)
         elseif k == "expose" then
             user.dirty = true
         else
-            user.input[#user.input + 1] = {kind = k, e = e}
+            user.input[#user.input + 1] = {kind = k, e = e, t = host.ticks()}
         end
     end
     if user.exitAfter and host.ticks() - user.started > user.exitAfter then
@@ -994,34 +1024,27 @@ end
 local lastClick = {time = 0, x = 0, y = 0, w = nil, button = 0}
 local DBLCLK_MS = 500
 
--- The next input event as a Windows message (or nil).
+-- The next input event as a Windows message (or nil). Raw input is
+-- translated in order; a message PeekMessage looked at without removing it
+-- (or that didn't match a filter) waits, already translated, for the next call.
+user.translated = {}
 function user.inputMessage(hwnd, lo, hi, remove)
-    while #user.input > 0 do
-        local ev = user.input[1]
-        if not remove then
-            -- PeekMessage without removing: report that something is there
-            local m = user.peekInput(ev)
-            if m and matches(m, hwnd, lo, hi) then return m end
-            if m then return nil end
-            table.remove(user.input, 1)
-        else
-            table.remove(user.input, 1)
-            local m = user.translateInput(ev)
-            if m and matches(m, hwnd, lo, hi) then return m end
-            if m and not matches(m, hwnd, lo, hi) then
-                -- not for this filter: keep it for later as a posted message
-                user.posted[#user.posted + 1] = m
-            end
+    for i, m in ipairs(user.translated) do
+        if matches(m, hwnd, lo, hi) then
+            if remove then table.remove(user.translated, i) end
+            return m
         end
     end
-end
-
-function user.peekInput(ev)
-    if ev.kind == "move" or ev.kind == "down" or ev.kind == "up" then
-        return {hwnd = user.active and user.active.handle or 0, msg = WM.MOUSEMOVE, wp = 0, lp = 0, time = host.ticks(), x = 0, y = 0}
-    end
-    if ev.kind == "key" or ev.kind == "char" then
-        return {hwnd = user.focus and user.focus.handle or 0, msg = WM.KEYDOWN, wp = 0, lp = 0, time = host.ticks(), x = 0, y = 0}
+    while #user.input > 0 do
+        local ev = table.remove(user.input, 1)
+        local m = user.translateInput(ev)
+        if m then
+            if matches(m, hwnd, lo, hi) then
+                if not remove then user.translated[#user.translated + 1] = m end
+                return m
+            end
+            user.translated[#user.translated + 1] = m
+        end
     end
 end
 
@@ -1108,13 +1131,16 @@ function user.translateInput(ev)
             else
                 msg = base
                 -- double clicks: the class must ask for them (non-client ones always come)
-                if lastClick.w == w and lastClick.button == button and now - lastClick.time < DBLCLK_MS and
+                -- timed by when the clicks happened, not when they're handled
+                local at = ev.t or now
+                local quick = at - lastClick.time < DBLCLK_MS or ((ev.e[5] or 1) >= 2 and lastClick.time > 0)
+                if lastClick.w == w and lastClick.button == button and quick and
                     math.abs(x - lastClick.x) <= 4 and math.abs(y - lastClick.y) <= 4 and
                     (not client or (w.class.style or 0) & 0x0008 ~= 0) then
                     msg = base + 2
                     lastClick.time = 0
                 else
-                    lastClick = {time = now, x = x, y = y, w = w, button = button}
+                    lastClick = {time = ev.t or now, x = x, y = y, w = w, button = button}
                 end
             end
         end
@@ -1164,6 +1190,8 @@ end
 function user.waitInput(timeout)
     local deadline = timeout and (host.ticks() + timeout)
     while true do
+        if #user.input > 0 then return table.remove(user.input, 1) end
+        user.pumpHost(0)
         if #user.input > 0 then return table.remove(user.input, 1) end
         -- keep the screen up to date meanwhile
         local p = findPaint(user.desktop, 0)

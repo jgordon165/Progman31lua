@@ -20,9 +20,37 @@ installed `WINDOWS` folder, or the setup disks/CD, where they're compressed
 (`PROGMAN.EX_`) and expanded on the fly, as Setup would. Those files are
 git-ignored, and release packages are checked for them.
 
-> **Status:** early. The host, the recompiler (with its tests), the NE
-> loader and the KERNEL side of the Win16 layer are in; USER, GDI and SHELL
-> are being built out to bring Program Manager's windows up.
+## What works
+
+- **The real Program Manager**: groups, icons, drag and drop between groups,
+  File > New/Properties/Run/Delete, Change Icon, Options, Window > Cascade /
+  Tile / Arrange Icons, minimized groups, the keyboard (accelerators,
+  Alt+letter menus, Ctrl+F4/F6), Help > About. Settings and groups are
+  saved as Program Manager always did, in `PROGMAN.INI` and `.GRP` files.
+- **First run**: Program Manager starts empty, as it did before Windows Setup
+  filled it. Progman31lua then plays Setup's part and sends Program Manager
+  Setup's DDE commands from your `SETUP.INF` (`[CreateGroup(Main)]`,
+  `[AddItem(WINFILE.EXE,File Manager)]`, ...). Program Manager builds its
+  own Main, Accessories, Games and StartUp groups, with the icons taken out
+  of your Windows 3.1 programs.
+- **Starting programs**: the Windows 3.1 programs can't run on 64-bit
+  Windows, so each starts its modern counterpart (Notepad, Calculator,
+  Paint, File Explorer, Control Panel, ...). The map is `[Programs]` in
+  `PROGMAN31.INI` in Program Manager's Windows folder; edit it to taste.
+  Solitaire starts [Solitairepack](https://github.com/jgordon165/Solitairepack)
+  when it's installed beside Progman31lua. Items you add that point at modern
+  programs or documents start them directly, and show their own icons
+  (reduced to Windows 3.1's 16 colours).
+- **The look**: the window frames, buttons, arrows and check boxes come from
+  your VGA display driver; the System and MS Sans Serif fonts from your
+  `.FON` files; the startup screen is your `VGALOGO.RLE`.
+- **As a modern app**: the host window is Program Manager's frame. Its
+  caption is the window's title bar, and resizing the window resizes
+  Program Manager. `--desktop` shows the whole Windows 3.1 desktop instead.
+
+Not there yet: Windows Help (`.HLP`), dropping files from Explorer onto a
+group, and running the Windows 3.1 accessories themselves on the recompiler
+(the Win16 layer could host them, which is a natural next step).
 
 ## Build
 
@@ -51,6 +79,7 @@ root of each drive (so a mounted Windows 3.1 CD or disk image is found).
 | `--home <folder>` | where Program Manager's `C:\WINDOWS` lives (`PROGMAN.INI`, the `.GRP` group files); default: your app data folder |
 | `--screen WxH` | window size (default 800x600) |
 | `--no-logo` | skip the startup screen |
+| `--desktop` | the whole Windows 3.1 desktop instead of just Program Manager |
 | `--trace` | log every Windows call Program Manager makes |
 | `--dump <folder>` | write each recompiled block's Lua source there |
 

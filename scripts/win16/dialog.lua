@@ -606,7 +606,10 @@ function user.messageBox(owner, text, caption, kind)
     local style = WS.POPUP | WS.CAPTION | WS.SYSMENU | 0x80
     local mark = api.mark()
     user.pendingDlgProc = msgboxProc
-    local d = user.create("#32770", caption or "Error", style, x, y, ww2, wh, owner and owner.handle or nil, 0, 0, 0, 1)
+    -- system-modal (and ownerless) boxes stay above everything
+    local ex = 1
+    if kind & 0x1000 ~= 0 or not owner then ex = ex | 8 end
+    local d = user.create("#32770", caption or "Error", style, x, y, ww2, wh, owner and owner.handle or nil, 0, 0, 0, ex)
     user.pendingDlgProc = nil
     if not d then api.release(mark); return 1 end
     d.dlgProc = msgboxProc

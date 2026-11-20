@@ -271,16 +271,24 @@ for i = 1, 64 do
     GRAY[i] = ((x + y) % 2 == 0) and 0xFFFFFF or 0
 end
 
-local function xorFrame(r, t)
-    fb.clip(nil)
-    local x, y, cw, ch = r[1], r[2], r[3] - r[1], r[4] - r[2]
-    fb.patblt(0, x, y, cw, t, 0x5A, GRAY)
-    fb.patblt(0, x, y + ch - t, cw, t, 0x5A, GRAY)
-    fb.patblt(0, x, y + t, t, ch - 2 * t, 0x5A, GRAY)
-    fb.patblt(0, x + cw - t, y + t, t, ch - 2 * t, 0x5A, GRAY)
+-- The outline is an overlay: drawn over the screen for each present (XOR
+-- with the gray pattern, as Windows 3.1 drew it) and never left behind.
+local function outline(r, t)
+    return {x = r[1], y = r[2], w = r[3] - r[1], h = r[4] - r[2], draw = function(o)
+        fb.clip(nil)
+        local x, y, cw, ch = o.x, o.y, o.w, o.h
+        fb.patblt(0, x, y, cw, t, 0x5A, GRAY)
+        fb.patblt(0, x, y + ch - t, cw, t, 0x5A, GRAY)
+        fb.patblt(0, x, y + t, t, ch - 2 * t, 0x5A, GRAY)
+        fb.patblt(0, x + cw - t, y + t, t, ch - 2 * t, 0x5A, GRAY)
+    end}
+end
+defwnd.outline = outline
+
+local function showOutline(o, r)
+    o.x, o.y, o.w, o.h = r[1], r[2], r[3] - r[1], r[4] - r[2]
     user.dirty = true
 end
-defwnd.xorFrame = xorFrame
 
 function defwnd.track(w, hit, sx, sy)
     if user.appMode and w == user.frame then return end
@@ -290,9 +298,16 @@ function defwnd.track(w, hit, sx, sy)
     local p = w.parent
     local pc = user.clientRect(p)
     local minW, minH = w.iconic and 0 or 100, w.iconic and 0 or (MT.CYCAPTION + 8)
-    xorFrame(r, t)
-    user.present()
+    local o = outline(r, t)
+    local drawFn = o.draw
+    o.draw = function() drawFn(o) end
+    local shown = false
     local moved = false
+    local function done(ok)
+        for i, x in ipairs(user.overlays) do if x == o then table.remove(user.overlays, i); break end end
+        user.dirty = true
+        return ok
+    end
     while true do
         local ev = user.waitInput()
         if ev.kind == "move" or ev.kind == "up" then
@@ -301,6 +316,8 @@ function defwnd.track(w, hit, sx, sy)
             x = math.max(pc[1], math.min(pc[3] - 1, x))
             y = math.max(pc[2], math.min(pc[4] - 1, y))
             local dx, dy = x - sx, y - sy
+            -- a few pixels of slack before a press becomes a drag
+            if not moved and math.abs(dx) <= 2 and math.abs(dy) <= 2 and ev.kind == "move" then goto next end
             if dx ~= 0 or dy ~= 0 then moved = true end
             local n = {r0[1], r0[2], r0[3], r0[4]}
             if hit == HT.CAPTION then
@@ -311,20 +328,18 @@ function defwnd.track(w, hit, sx, sy)
                 if hit == HT.TOP or hit == HT.TOPLEFT or hit == HT.TOPRIGHT then n[2] = math.min(r0[2] + dy, r0[4] - minH) end
                 if hit == HT.BOTTOM or hit == HT.BOTTOMLEFT or hit == HT.BOTTOMRIGHT then n[4] = math.max(r0[4] + dy, r0[2] + minH) end
             end
-            xorFrame(r, t)
             r = n
-            if ev.kind == "up" then
-                user.present()
-                break
-            end
-            xorFrame(r, t)
+            if ev.kind == "up" then break end
+            if not shown then user.overlays[#user.overlays + 1] = o; shown = true end
+            showOutline(o, r)
             user.present()
         elseif ev.kind == "key" and ev.e[2] == 0x1B and ev.e[3] == 1 then
-            xorFrame(r, t)
-            user.present()
-            return false
+            user.buttons[1] = false
+            return done(false)
         end
+        ::next::
     end
+    done(true)
     user.buttons[1] = false
     if not moved then return false end
     local ox, oy = user.clientOrigin(p)
@@ -422,7 +437,22 @@ function defwnd.proc(hwnd, msg, wp, lp)
             if w.iconic then
                 -- a click on an icon opens its system menu; a drag moves it
                 local moved = defwnd.track(w, HT.CAPTION, x, y)
-                if not moved and user.trackSysMenu and not (user.appMode and w == user.frame) then user.trackSysMenu(w) end
+                if moved or (user.appMode and w == user.frame) then return 0 end
+                -- a second click within the double-click time restores it instead
+                local deadline = host.ticks() + 450
+                while host.ticks() < deadline do
+                    local ev = user.waitInput(math.max(deadline - host.ticks(), 1))
+                    if ev and ev.kind == "down" and ev.e[4] == 1 then
+                        local ev2 = user.waitInput(300)
+                        user.buttons[1] = false
+                        user.send(w, WM.SYSCOMMAND, SC.RESTORE, lp)
+                        return 0
+                    elseif ev and ev.kind ~= "move" and ev.kind ~= "up" then
+                        table.insert(user.input, 1, ev)
+                        break
+                    end
+                end
+                if user.trackSysMenu then user.trackSysMenu(w) end
                 return 0
             end
             user.send(w, WM.SYSCOMMAND, SC.MOVE + HT.CAPTION, lp)
