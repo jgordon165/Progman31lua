@@ -28,7 +28,7 @@ logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
 -- (plain black small serif): MS Serif at this point size
 -- (plain black small serif): MS Serif at this point size; FOOTER_SCRIPT is
 -- set apart in raised gold letters in Windows 3.1's Script font (SCRIPT.FON)
-logo.FOOTER = {"WITH ", "FATALS", " ENTERTAINMENT PACK"}
+logo.FOOTER = {"WITH ", "fatals", " ENTERTAINMENT PACK"}
 logo.FOOTER_SCRIPT = 2          -- which part is in script
 logo.FOOTER_POINTS = 10
 logo.FOOTER_BASELINE = 376
@@ -279,25 +279,63 @@ local function vectorFont(data)
     return f
 end
 
--- Text drawn with a round pen: a mask {w, h, pix, baseline}.
+-- Text drawn with a round pen: a mask {w, h, pix, baseline}. Joined:
+-- where a letter's exit stroke doesn't already meet the next letter, a short
+-- stroke joins it to the nearest point of that letter, so the word is one line.
 local function strokeText(f, text, capHeight, pen)
     local s = capHeight / f.ascent
     local r = pen / 2
-    local pts = {}
+    -- every letter's strokes in font units, placed along the line
+    local letters = {}
     local cx = 0
     for i = 1, #text do
         local g = f.glyphs[text:byte(i)]
         if g then
+            local placed = {}
             for _, st in ipairs(g.strokes) do
-                for j = 1, #st - 3, 2 do
-                    local x0, y0, x1, y1 = (cx + st[j]) * s, st[j + 1] * s, (cx + st[j + 2]) * s, st[j + 3] * s
-                    local n = math.max(1, math.ceil(math.max(math.abs(x1 - x0), math.abs(y1 - y0)) * 2))
-                    for t = 0, n do
-                        pts[#pts + 1] = {x0 + (x1 - x0) * t / n, y0 + (y1 - y0) * t / n}
+                local q = {}
+                for j = 1, #st - 1, 2 do q[#q + 1] = cx + st[j]; q[#q + 1] = st[j + 1] end
+                placed[#placed + 1] = q
+            end
+            letters[#letters + 1] = placed
+            cx = cx + g.width
+        end
+    end
+    local strokes = {}
+    for i, placed in ipairs(letters) do
+        for _, q in ipairs(placed) do strokes[#strokes + 1] = q end
+        local nextL = letters[i + 1]
+        if nextL and #placed > 0 then
+            -- the exit: the stroke end furthest right
+            local ex, ey
+            for _, q in ipairs(placed) do
+                for _, j in ipairs({1, #q - 1}) do
+                    if not ex or q[j] > ex then ex, ey = q[j], q[j + 1] end
+                end
+            end
+            -- the nearest point of the next letter (along its strokes)
+            local bx, by, bd
+            for _, q in ipairs(nextL) do
+                for j = 1, #q - 3, 2 do
+                    local x0, y0, x1, y1 = q[j], q[j + 1], q[j + 2], q[j + 3]
+                    for t = 0, 8 do
+                        local px, py = x0 + (x1 - x0) * t / 8, y0 + (y1 - y0) * t / 8
+                        local d = (px - ex) ^ 2 + (py - ey) ^ 2
+                        if not bd or d < bd then bx, by, bd = px, py, d end
                     end
                 end
             end
-            cx = cx + g.width
+            if bd and bd > 0.25 then strokes[#strokes + 1] = {ex, ey, bx, by} end
+        end
+    end
+    local pts = {}
+    for _, st in ipairs(strokes) do
+        for j = 1, #st - 3, 2 do
+            local x0, y0, x1, y1 = st[j] * s, st[j + 1] * s, st[j + 2] * s, st[j + 3] * s
+            local n = math.max(1, math.ceil(math.max(math.abs(x1 - x0), math.abs(y1 - y0)) * 2))
+            for t = 0, n do
+                pts[#pts + 1] = {x0 + (x1 - x0) * t / n, y0 + (y1 - y0) * t / n}
+            end
         end
     end
     local pix = {}
