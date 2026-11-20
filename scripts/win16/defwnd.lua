@@ -619,6 +619,22 @@ function user.beginPaint(w, ps)
     if w.ncdirty then w.ncdirty = false; user.send(w, WM.NCPAINT, 1, 0) end
     local upd = w.upd or {}
     w.upd = nil
+    -- without WS_CLIPCHILDREN the window paints over its children, so they
+    -- are painted again after it
+    if #upd > 0 and w.style & WS.CLIPCHILDREN == 0 then
+        for _, c in ipairs(w.children) do
+            if c.visible and not c.destroyed then
+                local cr = {c.x, c.y, c.x + c.w, c.y + c.h}
+                for _, r in ipairs(upd) do
+                    local i = region.isect(r, cr)
+                    if i then
+                        user.invalidate(c, {i[1] - c.x - c.cl[1], i[2] - c.y - c.cl[2], i[3] - c.x - c.cl[1], i[4] - c.y - c.cl[2]}, true)
+                        if c.cl[1] > 0 or c.cl[2] > 0 or c.cl[3] < c.w or c.cl[4] < c.h then c.ncdirty = true end
+                    end
+                end
+            end
+        end
+    end
     local hdc = user.getDC(w, false, upd)
     local dc = gdi.dc(hdc)
     local erase = w.erase

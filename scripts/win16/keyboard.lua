@@ -80,4 +80,12 @@ def("KEYBOARD", 133, "GetKeyNameText", "l p i", function(lp, buf, n)
     return api.putstr(buf, name or "", n)
 end)
 
+-- SetSpeed(rate): the typematic rate (Control Panel's Keyboard); -1 asks for it
+local speed = 31
+api.def("KEYBOARD", 7, "SetSpeed", "i", function(rate)
+    local old = speed
+    if rate >= 0 then speed = rate end
+    return old
+end)
+
 return {}

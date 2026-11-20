@@ -82,6 +82,7 @@ function cpu.freesel(s)
 end
 
 function cpu.sel(s) return sels[s] end
+function cpu.selbase(s) local d = sels[s]; return d and d.base or 0 end
 
 function cpu.setsel(s, base, limit)
     local d = sels[s]
@@ -409,6 +410,7 @@ function cpu.run(R)
             f(R)
         else
             local fn = cache[(cs << 16) | ip] or compile(cs, ip)
+            if cpu.blockTrace then cpu.blockTrace(cs, ip, R) end
             fn(R)
         end
     end
@@ -442,6 +444,9 @@ function cpu.call16(R, sel, off, args, regs)
     if depth > 200 then depth = 0; error("callbacks nested too deeply", 0) end
     local ok, err = pcall(cpu.run, R)
     depth = depth - 1
+    if not ok and type(err) == "string" and not err:find("\n(in ", 1, true) then
+        err = err .. string.format("\n(in %04X:%04X)", R.cs, R.ip)
+    end
     local ax, dx = R.ax, R.dx
     for _, k in ipairs(SAVE) do R[k] = saved[k] end
     if not ok then error(err, 0) end

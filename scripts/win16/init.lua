@@ -33,6 +33,7 @@ function win16.init(cfg)
     require("win16.signatures")
     local dosfs = require("win16.dosfs")
     dosfs.init(cfg.home, cfg.data)
+    require("win16.defaults").dataDir = cfg.data
     require("win16.defaults").install()
 
     local sys = {}
@@ -46,26 +47,40 @@ function win16.init(cfg)
     local kernel = require("win16.kernel")
     local gdi = require("win16.gdi")
     gdi.init(cfg.screenW, cfg.screenH, sys)
+    require("win16.gdidraw")
+    kernel.addResourceModule("DISPLAY", sys.display)
     local user = require("win16.user")
     user.init(cfg, sys)
     require("win16.shell")
     require("win16.keyboard")
+    require("win16.mmsystem")
 
-    -- PROGMAN.EXE
+    -- the program: PROGMAN.EXE, or another (--program CONTROL.EXE)
+    kernel.dataDir = cfg.data
     local boot = require("boot")
-    local bytes = boot.dataFile(cfg.data, "PROGMAN.EXE")
-    if not bytes then error("PROGMAN.EXE could not be read from " .. cfg.data) end
-    local mod, err = ne.parse(bytes, "PROGMAN.EXE")
-    if not mod then error("PROGMAN.EXE: " .. err) end
-    local inst = loader.load(mod, api.resolve, {program = true})
+    local program = (type(cfg.opts.program) == "string" and cfg.opts.program or "PROGMAN.EXE"):upper()
+    if not program:find("%.") then program = program .. ".EXE" end
+    state.program = program
+    local bytes = boot.dataFile(cfg.data, program)
+    if not bytes then error(program .. " could not be read from " .. cfg.data) end
+    local mod, err = ne.parse(bytes, program)
+    if not mod then error(program .. ": " .. err) end
+    -- the task exists before its imports are resolved: a DLL it imports runs
+    -- its LibEntry on the task's stack
+    local inst = loader.load(mod, kernel.resolve, {program = true, beforeRelocs = function(inst)
+        state.task = kernel.startTask(inst, {path = "C:\\WINDOWS\\" .. program, cmdShow = 1,
+            cmdLine = type(cfg.opts.args) == "string" and cfg.opts.args or ""})
+        require("win16.tasks").switch(state.task)
+    end})
     state.progman = inst
-    host.log(string.format("PROGMAN.EXE: %d segments, %d imports, %d internal fixups, %d prologues patched",
+    host.log(string.format("%s: %d segments, %d imports, %d internal fixups, %d prologues patched", program,
         #mod.segments, inst.stats.imports, inst.stats.internal, inst.stats.prologues or 0))
-    local task = kernel.startTask(inst, {path = "C:\\WINDOWS\\PROGMAN.EXE", cmdShow = 1, cmdLine = ""})
+    local task = state.task
+    require("win16.tasks").add(task)
     user.setTask(task, mod)
-    state.task = task
     local games = require("win16.games")
     if games.init(cfg.opts.games) then host.log("Games: " .. games.hostDir()) end
+    if program ~= "PROGMAN.EXE" then return end
     if not require("win16.defaults").hasGroups() then
         if not cfg.opts["no-setup"] then
             user.idle = function()
@@ -82,14 +97,13 @@ function win16.init(cfg)
 end
 
 function win16.run()
-    local task = state.task
-    local ok, err = pcall(cpu.run, task.R)
+    local ok, err = pcall(require("win16.tasks").run)
     local user = require("win16.user")
     user.shutdown()
     if not ok then
         if type(err) == "table" and err.exit then return err.exit end
         if type(err) == "table" and err.quit then return err.code or 0 end
-        local R = task.R
+        local R = require("win16.kernel").task.R
         local msg = tostring(err) .. string.format("\n(at %04X:%04X)", R.cs, R.ip)
         host.log("Program Manager stopped: " .. msg)
         if not host.headless then host.message_box("Program Manager", msg) end

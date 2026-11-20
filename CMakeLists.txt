@@ -108,6 +108,10 @@ if(PROGMAN31LUA_TESTS)
         add_test(NAME progman COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
                  --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-home --fresh
                  --test ${CMAKE_SOURCE_DIR}/tests/lua/test_progman.lua)
+        # Control Panel: the original CONTROL.EXE and its applets as a second task
+        add_test(NAME control COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
+                 --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-control-home --fresh
+                 --test ${CMAKE_SOURCE_DIR}/tests/lua/test_control.lua)
         # the Games group from a games folder: two Program Manager runs per home
         foreach(phase setup sync plain upgrade)
             if(phase STREQUAL "setup" OR phase STREQUAL "sync")

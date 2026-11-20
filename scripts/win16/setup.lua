@@ -71,7 +71,7 @@ local function fromInf(text)
 end
 
 function setup.commands()
-    local inf = dosfs.read(dosfs.windows .. "\\SETUP.INF")
+    local inf = dosfs.read(dosfs.system .. "\\SETUP.INF")
     local groups = inf and fromInf(inf) or BUILTIN
     -- with a games folder, the Games group is its shortcuts instead
     local games = require("win16.games")

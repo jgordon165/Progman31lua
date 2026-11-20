@@ -210,16 +210,23 @@ function user.visRegion(w, clientOnly)
         local pc = user.clientRect(p)
         vis = region.intersect(vis, {pc})
         if #vis == 0 then return vis end
-        -- siblings above (earlier in the list)
-        local cut = {}
-        for _, s in ipairs(p.children) do
-            if s == cur then break end
-            if s.visible then cut[#cut + 1] = user.windowRect(s) end
+        -- siblings above (earlier in the list): top-level windows always
+        -- clip each other, child windows only with WS_CLIPSIBLINGS (so a
+        -- control under a group box still paints, as in Windows)
+        if p == user.desktop or cur.style & WS.CLIPSIBLINGS ~= 0 then
+            local cut = {}
+            for _, s in ipairs(p.children) do
+                if s == cur then break end
+                if s.visible then cut[#cut + 1] = user.windowRect(s) end
+            end
+            if #cut > 0 then vis = region.subtract(vis, cut) end
         end
-        if #cut > 0 then vis = region.subtract(vis, cut) end
         cur = p
     end
-    if w.children then
+    -- the children are cut out only with WS_CLIPCHILDREN (or for the
+    -- window's frame): without it, a window paints under its children, and
+    -- they paint after it, as in Windows
+    if w.children and (not clientOnly or w.style & WS.CLIPCHILDREN ~= 0) then
         local cut = {}
         for _, c in ipairs(w.children) do
             if c.visible then cut[#cut + 1] = user.windowRect(c) end
@@ -243,6 +250,20 @@ function user.invalidate(w, rect, erase)
     if not r then return end
     w.upd = region.union(w.upd or {}, {r})
     if erase then w.erase = true end
+    -- without WS_CLIPCHILDREN the children under the area are repainted too
+    -- (the parent paints over them)
+    if w.style & WS.CLIPCHILDREN == 0 then
+        for _, c in ipairs(w.children) do
+            if c.visible and not c.destroyed then
+                local cr = region.isect(r, {c.x, c.y, c.x + c.w, c.y + c.h})
+                if cr then
+                    local cl = c.cl
+                    if cl[1] > 0 or cl[2] > 0 or cl[3] < c.w or cl[4] < c.h then c.ncdirty = true end
+                    user.invalidate(c, {cr[1] - c.x - cl[1], cr[2] - c.y - cl[2], cr[3] - c.x - cl[1], cr[4] - c.y - cl[2]}, erase)
+                end
+            end
+        end
+    end
 end
 
 -- Repaints everything under a screen-coordinate area: frames and clients of
@@ -313,6 +334,13 @@ function user.brushFor(b)
 end
 
 local sysBrushes = {}
+-- the system-colour brushes take on new colours (SetSysColors)
+function user.resetSysBrushes()
+    for idx, h in pairs(sysBrushes) do
+        local b = handles.get(h)
+        if b then b.color = C[idx] end
+    end
+end
 function user.sysBrush(idx)
     if not sysBrushes[idx] then
         sysBrushes[idx] = gdi.newBrush(C[idx])
@@ -364,6 +392,9 @@ function user.init(cfg, sys)
     require("win16.dialog")
     require("win16.mdi")
     require("win16.usermisc")
+    require("win16.usermore")
+    require("win16.scrollctl")
+    user.loadColors()
     require("win16.dragdrop")
     host.cursor("arrow")
 end
@@ -403,9 +434,12 @@ function user.callProc(proc, hwnd, msg, wp, lp)
         if r == true then r = 1 elseif not r then r = 0 end
         return r
     end
-    local R = user.task.R
-    local dg = user.task.dgroup
-    local ax, dx = cpu.call16(R, proc >> 16, proc & 0xFFFF, {hwnd, msg, wp, lp >> 16, lp & 0xFFFF}, {ds = dg, ax = dg})
+    -- on the stack of the task the window belongs to
+    local w = W(hwnd)
+    local ax, dx = require("win16.tasks").callOn(w and w.task or user.task, function(t)
+        return cpu.call16(t.R, proc >> 16, proc & 0xFFFF, {hwnd, msg, wp, lp >> 16, lp & 0xFFFF},
+                          {ds = t.dgroup, ax = t.dgroup})
+    end)
     return (dx << 16) | ax
 end
 
@@ -420,8 +454,16 @@ end
 function user.post(w, msg, wp, lp)
     local h = type(w) == "table" and w.handle or w or 0
     user.posted[#user.posted + 1] = {hwnd = h, msg = msg, wp = (wp or 0) & 0xFFFF, lp = (lp or 0) & 0xFFFFFFFF,
-                                     time = host.ticks(), x = user.mouseX, y = user.mouseY}
+                                     time = host.ticks(), x = user.mouseX, y = user.mouseY,
+                                     task = h == 0 and user.task or nil}
     return true
+end
+
+-- The task a message is for: its window's (or, posted to no window, the poster's).
+function user.taskOfMsg(m)
+    if m.task then return m.task end
+    local w = W(m.hwnd)
+    return (w and w.task) or require("win16.tasks").main
 end
 
 -- CreateWindow
@@ -455,7 +497,7 @@ function user.create(className, title, style, x, y, cw, ch, parent, menu, inst, 
     local w = newWindow({class = cls, style = style & ~(WS.VISIBLE | WS.MINIMIZE | WS.MAXIMIZE), exstyle = exstyle,
                          parent = p, owner = owner, x = x, y = y, w = cw, h = ch, inst = inst, proc = cls.proc,
                          id = child and menu or 0, menu = (not child) and menu or nil, visible = false,
-                         disabled = style & WS.DISABLED ~= 0})
+                         disabled = style & WS.DISABLED ~= 0, task = user.task})
     if not child and (not menu or menu == 0) and cls.menuName and user.loadMenu then
         w.menu = user.loadMenu(inst, cls.menuName)
     end
@@ -503,6 +545,7 @@ end
 function user.destroy(w)
     if not w or w.destroyed or w.dying then return false end
     w.dying = true
+    if user.killTimersOf then user.killTimersOf(w) end
     local wasVisible = w.visible and user.isVisible(w)
     local rect = wasVisible and user.windowRect(w)
     if w.style & WS.CHILD ~= 0 and w.exstyle & WS_EX_NOPARENTNOTIFY == 0 and w.parent and not w.parent.destroyed then
@@ -772,6 +815,7 @@ end
 user.writeMsg, user.readMsg = writeMsg, readMsg
 
 local function matches(m, hwnd, lo, hi)
+    if user.taskOfMsg(m) ~= user.task then return false end
     if hwnd ~= 0 then
         local w = W(m.hwnd)
         local target = W(hwnd)
@@ -785,7 +829,7 @@ end
 -- (returned as a message), so the program paints in its own loop.
 local function findPaint(w, hwnd)
     for _, c in ipairs(w.children) do
-        if c.visible and not c.destroyed then
+        if c.visible and not c.destroyed and (c.task == user.task or not c.task) then
             if c.ncdirty then
                 c.ncdirty = false
                 user.send(c, WM.NCPAINT, 1, 0)
@@ -797,6 +841,20 @@ local function findPaint(w, hwnd)
             if r then return r end
         end
     end
+end
+
+-- Whether a task has a window to paint (or a frame to draw).
+function user.needsPaint(t)
+    local function walk(w)
+        for _, c in ipairs(w.children) do
+            if c.visible and not c.destroyed and (c.task == t or not c.task) then
+                if c.ncdirty or (c.upd and #c.upd > 0) then return true end
+                if walk(c) then return true end
+            end
+        end
+        return false
+    end
+    return walk(user.desktop)
 end
 
 function user.present()
@@ -894,6 +952,9 @@ function user.nextMessage(hwnd, lo, hi, remove, wait)
         -- input
         local m = user.inputMessage(hwnd, lo, hi, remove)
         if m then return m end
+        -- timers come after input and before painting
+        local tm = user.timerMessage and user.timerMessage(hwnd, lo, hi, remove)
+        if tm then return tm end
         if user.quit and (lo == 0 and hi == 0) then
             return {hwnd = 0, msg = WM.QUIT, wp = user.quit, lp = 0, time = host.ticks(), x = 0, y = 0}
         end
@@ -912,9 +973,12 @@ function user.nextMessage(hwnd, lo, hi, remove, wait)
             goto continue
         end
         user.present()
+        local tasks = require("win16.tasks")
         if not wait then
+            -- PeekMessage gives the other programs their turn too
+            if tasks.othersReady() then tasks.yield() end
             if user.pumpHost(0) == 0 then return nil end
-        else
+        elseif not tasks.yield() then
             user.pumpHost(20)
         end
         ::continue::
@@ -1002,10 +1066,17 @@ end
 -- ---- input --------------------------------------------------------------------------------------------------
 
 -- The deepest visible, enabled window under a screen point, and its hit code.
+-- Controls the mouse passes through (HTTRANSPARENT): statics and group boxes.
+local function transparentCtl(c)
+    if c.style & WS.CHILD == 0 or not c.class then return false end
+    local n = c.class.name
+    return n == "STATIC" or (n == "BUTTON" and c.style & 0xF == 7)
+end
+
 function user.windowFromPoint(x, y, parent)
     parent = parent or user.desktop
     for _, c in ipairs(parent.children) do
-        if c.visible and not c.destroyed then
+        if c.visible and not c.destroyed and not transparentCtl(c) then
             local r = user.windowRect(c)
             if x >= r[1] and x < r[3] and y >= r[2] and y < r[4] then
                 if c.disabled and c.style & WS.CHILD ~= 0 then return parent, HT.CLIENT end
@@ -1081,6 +1152,8 @@ function user.translateInput(ev)
         local x, y = user.mouseX, user.mouseY
         if ev.kind ~= "wheel" then x, y = ev.e[2], ev.e[3]; user.mouseX, user.mouseY = x, y end
         local button = ev.e[4]
+        -- Swap Left/Right Buttons (Control Panel's Mouse)
+        if user.swapped and (button == 1 or button == 2) then button = 3 - button end
         if ev.kind == "down" then user.buttons[button] = true elseif ev.kind == "up" then user.buttons[button] = false end
         if ev.kind == "wheel" then
             -- the wheel scrolls whatever's under the pointer that has a scroll bar
@@ -1103,7 +1176,8 @@ function user.translateInput(ev)
             -- a disabled window (behind a dialog) only beeps
             local top = user.topLevel(w)
             if top.disabled then
-                if ev.kind == "down" and user.modal then user.activate(user.modal) end
+                local modal = (top.task == user.task or not top.task) and user.modal or (top.task and top.task.modal)
+                if ev.kind == "down" and modal then user.activate(modal) end
                 return nil
             end
             local mm = ev.kind == "move" and WM.MOUSEMOVE or ev.kind == "down" and (button == 1 and WM.LBUTTONDOWN or button == 2 and WM.RBUTTONDOWN or WM.MBUTTONDOWN)
@@ -1212,6 +1286,58 @@ function user.dispatchOne(m)
     if not w then return end
     user.send(w, m.msg, m.wp, m.lp)
     if m.msg == WM.PAINT and w.upd and #w.upd > 0 and not w.destroyed then w.upd = nil end
+end
+
+-- ---- timers ------------------------------------------------------------------------------------------------
+
+user.timers = {}
+local nextTimerId = 0x100
+
+function user.timerDue(t)
+    local now = host.ticks()
+    for _, tm in ipairs(user.timers) do
+        if tm.task == t and now >= tm.due then return true end
+    end
+    return false
+end
+
+function user.timerMessage(hwnd, lo, hi, remove)
+    if not (lo == 0 and hi == 0) and not (WM.TIMER >= lo and WM.TIMER <= hi) then return nil end
+    local now = host.ticks()
+    for _, tm in ipairs(user.timers) do
+        if tm.task == user.task and now >= tm.due and (hwnd == 0 or tm.hwnd == hwnd) then
+            if remove then tm.due = now + tm.elapse end
+            return {hwnd = tm.hwnd, msg = WM.TIMER, wp = tm.id, lp = tm.proc, time = now, x = user.mouseX, y = user.mouseY}
+        end
+    end
+end
+
+def("USER", 10, "SetTimer", "h w w f", function(hwnd, id, elapse, proc)
+    if hwnd ~= 0 and not W(hwnd) then return 0 end
+    elapse = math.max(elapse, 55)    -- the PC timer's 18.2 ticks a second
+    for _, tm in ipairs(user.timers) do
+        if hwnd ~= 0 and tm.hwnd == hwnd and tm.id == id then
+            tm.elapse, tm.proc, tm.due = elapse, proc, host.ticks() + elapse
+            return id
+        end
+    end
+    if hwnd == 0 then id = nextTimerId; nextTimerId = nextTimerId + 1 end
+    user.timers[#user.timers + 1] = {hwnd = hwnd, id = id, elapse = elapse, proc = proc,
+                                     due = host.ticks() + elapse, task = user.task}
+    return id ~= 0 and id or 1
+end)
+def("USER", 12, "KillTimer", "h w", function(hwnd, id)
+    for i, tm in ipairs(user.timers) do
+        if tm.hwnd == hwnd and tm.id == id then table.remove(user.timers, i) return 1 end
+    end
+    return 0
+end)
+
+-- a destroyed window's timers go with it
+function user.killTimersOf(w)
+    for i = #user.timers, 1, -1 do
+        if user.timers[i].hwnd == w.handle then table.remove(user.timers, i) end
+    end
 end
 
 return user

@@ -33,8 +33,20 @@ git-ignored, and release packages are checked for them.
   `[AddItem(WINFILE.EXE,File Manager)]`, ...). Program Manager builds its
   own Main, Accessories, Games and StartUp groups, with the icons taken out
   of your Windows 3.1 programs.
-- **Starting programs**: the Windows 3.1 programs can't run on 64-bit
-  Windows, so each starts its modern counterpart (Notepad, Calculator,
+- **Control Panel, the original**: Control Panel's icon starts Windows
+  3.1's own `CONTROL.EXE`, recompiled and running beside Program Manager
+  as a second task (cooperatively, as Windows 3.1 ran programs), with its
+  applets loaded from your `MAIN.CPL`, `CPWIN386.CPL`, `DRIVERS.CPL` and
+  `SND.CPL` (and the `COMMDLG`, `VER` and `LZEXPAND` DLLs they use). All
+  twelve open: Color, Fonts, Ports, Mouse, Desktop, Keyboard, Printers,
+  International, Date/Time, 386 Enhanced, Drivers and Sound. What they
+  change takes effect: a colour scheme recolours Program Manager at once
+  and is kept in `WIN.INI`; Swap Left/Right Buttons swaps them. Setting
+  the date or time moves Windows' clock only, never your computer's.
+  `CONTROL.INI` and `SYSTEM.INI` come from your setup disks' templates,
+  as Setup made them.
+- **Starting programs**: the other Windows 3.1 programs can't run on 64-bit
+  Windows yet, so each starts its modern counterpart (Notepad, Calculator,
   Paint, File Explorer, Control Panel, ...). The map is `[Programs]` in
   `PROGMAN31.INI` in Program Manager's Windows folder; edit it to taste.
   Solitaire starts [Solitairepack](https://github.com/jgordon165/Solitairepack)
@@ -67,8 +79,8 @@ git-ignored, and release packages are checked for them.
   Program Manager. `--desktop` shows the whole Windows 3.1 desktop instead.
 
 Not there yet: Windows Help (`.HLP`), dropping files from Explorer onto a
-group, and running the Windows 3.1 accessories themselves on the recompiler
-(the Win16 layer could host them, which is a natural next step).
+group, and the other Windows 3.1 accessories on the recompiler (the way
+Control Panel runs; `*` in `[Programs]` asks for that).
 
 ## Build
 
@@ -99,6 +111,7 @@ root of each drive (so a mounted Windows 3.1 CD or disk image is found).
 | `--screen WxH` | window size (default 800x600) |
 | `--no-logo` | skip the startup screen |
 | `--desktop` | the whole Windows 3.1 desktop instead of just Program Manager |
+| `--program <name>` | run another Windows 3.1 program instead of Program Manager (`--program CONTROL.EXE`) |
 | `--trace` | log every Windows call Program Manager makes |
 | `--dump <folder>` | write each recompiled block's Lua source there |
 

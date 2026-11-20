@@ -11,6 +11,7 @@ local def = api.def
 local rw, ww, rb, wb = mem.rw, mem.ww, mem.rb, mem.wb
 
 kernel.task = nil      -- {R=, inst=, hInstance=, psp=, cmdShow=, cmdLine=, path=}
+kernel.clockOffset = 0 -- seconds Windows' clock runs ahead of the host's (Date/Time)
 kernel.modules = {}    -- module name -> {handle=, name=, file=}
 
 -- ---- global memory: a handle is the selector -------------------------------------------
@@ -84,37 +85,51 @@ function kernel.glin(h)
     return g and not g.discarded and g.base or nil
 end
 
--- ---- the local heap (in DGROUP, above the stack) ----------------------------------------
+-- ---- local heaps: one per data segment (the task's DGROUP, each DLL's) ----------------
 
-local lheap = {free = {}, used = {}}
+local lheaps = {}      -- selector -> {free=, used=, start=}
 
-local function lheapInit(start, stop)
-    start = (start + 3) & ~3
-    lheap.free = {{at = start, size = stop - start}}
-    lheap.used = {}
-    lheap.start = start
+local function heapOf(ds)
+    ds = ds or (kernel.task and kernel.task.dgroup)
+    return ds and lheaps[ds], ds
 end
 
-function kernel.lalloc(flags, size)
+local function lheapInit(start, stop, ds)
+    ds = ds or kernel.task.dgroup
+    start = (start + 3) & ~3
+    lheaps[ds] = {free = {{at = start, size = stop - start}}, used = {}, start = start}
+end
+kernel.lheapInit = lheapInit
+
+function kernel.lalloc(flags, size, ds)
+    local heap
+    heap, ds = heapOf(ds)
+    if not heap then return 0 end
     size = (math.max(size, 2) + 3) & ~3
-    for i, f in ipairs(lheap.free) do
+    for i, f in ipairs(heap.free) do
         if f.size >= size then
             local at = f.at
             f.at, f.size = f.at + size, f.size - size
-            if f.size == 0 then table.remove(lheap.free, i) end
-            lheap.used[at] = size
-            if flags & 0x40 ~= 0 then mem.fill(kernel.task.dgroupBase + at, size, 0) end
+            if f.size == 0 then table.remove(heap.free, i) end
+            heap.used[at] = size
+            if flags & 0x40 ~= 0 then mem.fill(cpu.selbase(ds) + at, size, 0) end
             return at
         end
     end
     return 0
 end
 
-function kernel.lfree(at)
-    local size = lheap.used[at]
+function kernel.lsize(at, ds)
+    local heap = heapOf(ds)
+    return heap and heap.used[at] or 0
+end
+
+function kernel.lfree(at, ds)
+    local heap = heapOf(ds)
+    local size = heap and heap.used[at]
     if not size then return at end
-    lheap.used[at] = nil
-    local free = lheap.free
+    heap.used[at] = nil
+    local free = heap.free
     local i = 1
     while i <= #free and free[i].at < at do i = i + 1 end
     table.insert(free, i, {at = at, size = size})
@@ -127,6 +142,24 @@ function kernel.lfree(at)
         table.remove(free, i)
     end
     return 0
+end
+
+function kernel.lrealloc(at, size, flags, ds)
+    local heap
+    heap, ds = heapOf(ds)
+    if not heap then return 0 end
+    if flags & 0x80 ~= 0 then return at end   -- LMEM_MODIFY
+    local old = heap.used[at]
+    if not old then return 0 end
+    local need = (math.max(size, 2) + 3) & ~3
+    if need <= old then return at end
+    local n = kernel.lalloc(0, size, ds)
+    if n == 0 then return 0 end
+    local base = cpu.selbase(ds)
+    mem.move(base + n, base + at, old)
+    if flags & 0x40 ~= 0 then mem.fill(base + n + old, heap.used[n] - old, 0) end
+    kernel.lfree(at, ds)
+    return n
 end
 
 -- ---- strings ----------------------------------------------------------------------------
@@ -165,8 +198,7 @@ function kernel.startTask(inst, opts)
     local task = {R = R, inst = inst, hInstance = dgroup, psp = psp, cmdShow = opts.cmdShow or 1,
                   path = opts.path, dgroup = dgroup, dgroupBase = inst.bases[mod.autoData],
                   stackLow = minsize, stackHigh = sp, heapStart = sp, module = mod}
-    kernel.task = task
-    lheapInit(sp + 0x10, 0xFFF0)
+    lheapInit(sp + 0x10, 0xFFF0, dgroup)
     cpu.setseg(R, "ds", dgroup)
     cpu.setseg(R, "es", psp)
     cpu.setseg(R, "ss", inst.sels[mod.ss] or dgroup)
@@ -240,10 +272,145 @@ def("KERNEL", 22, "GlobalFlags", "h", function(h)
     return (g.lock & 0xFF) | (g.flags & 0x100) | (g.discarded and 0x4000 or 0)
 end)
 
-def("KERNEL", 5, "LocalAlloc", "w w", function(flags, size) return kernel.lalloc(flags, size) end)
-def("KERNEL", 7, "LocalFree", "h", function(h) return kernel.lfree(h) end)
+-- the local heap calls work on the heap in the caller's DS
+def("KERNEL", 5, "LocalAlloc", "w w", function(flags, size, R) return kernel.lalloc(flags, size, R.ds) end)
+def("KERNEL", 7, "LocalFree", "h", function(h, R) return kernel.lfree(h, R.ds) end)
+def("KERNEL", 6, "LocalReAlloc", "h w w", function(h, size, flags, R) return kernel.lrealloc(h, size, flags, R.ds) end)
+def("KERNEL", 8, "LocalLock", "h", function(h) return h end)
+def("KERNEL", 9, "LocalUnlock", "h", function() return 0 end)
+def("KERNEL", 10, "LocalSize", "h", function(h, R) return kernel.lsize(h, R.ds) end)
+def("KERNEL", 11, "LocalHandle", "w", function(h) return h end)
+def("KERNEL", 13, "LocalCompact", "w", function() return 0x4000 end)
+-- LocalInit(segment, start, end): a heap in a segment (0: the caller's DS);
+-- start 0 means "after the static data", where the end is the segment's size
+def("KERNEL", 4, "LocalInit", "w w w", function(seg, start, stop, R)
+    if seg == 0 then seg = R.ds end
+    if not cpu.sel(seg) then return 0 end
+    if start == 0 then
+        -- the heap goes after the segment's data (pEnd is then its size;
+        -- it may grow to the end of the segment here)
+        start = 16
+        local m = kernel.instances[seg]
+        if m and m.dataEnd then start = m.dataEnd end
+        stop = 0xFFF0
+    end
+    lheapInit(start, stop, seg)
+    return 1
+end)
 
 def("KERNEL", 54, "GetInstanceData", "h w i", function() return 0 end)
+def("KERNEL", 121, "LocalShrink", "h w", function() return 0xFFF0 end)
+def("KERNEL", 25, "GlobalCompact", "l:l", function() return 0x00F00000 end)
+def("KERNEL", 23, "LockSegment", "w", function(s, R) return s == 0xFFFF and R.ds or s end)
+def("KERNEL", 24, "UnlockSegment", "w", function(s, R) return s == 0xFFFF and R.ds or s end)
+def("KERNEL", 191, "GlobalPageLock", "h", function() return 1 end)
+def("KERNEL", 192, "GlobalPageUnlock", "h", function() return 0 end)
+-- GlobalDosAlloc: DX = a (pretend) real-mode paragraph, AX = the selector
+def("KERNEL", 184, "GlobalDosAlloc", "l:l", function(size)
+    local h = kernel.galloc(0x40, size)
+    if h == 0 then return 0 end
+    return (0x9000 << 16) | h
+end)
+def("KERNEL", 185, "GlobalDosFree", "w", function(h) return kernel.gfree(h) end)
+
+-- ---- selectors ------------------------------------------------------------------------------
+
+def("KERNEL", 175, "AllocSelector", "w", function(s)
+    local d = s ~= 0 and cpu.sel(s)
+    local n = cpu.newsel(d and d.base or 0, d and d.limit or 0, d and d.code)
+    return n
+end)
+def("KERNEL", 176, "FreeSelector", "w", function(s)
+    if globals[s] then return s end
+    cpu.freesel(s)
+    return 0
+end)
+def("KERNEL", 186, "GetSelectorBase", "w:l", function(s) return cpu.selbase(s) end)
+def("KERNEL", 187, "SetSelectorBase", "w l", function(s, base)
+    local d = cpu.sel(s)
+    if not d then return 0 end
+    cpu.setsel(s, base, d.limit)
+    return s
+end)
+def("KERNEL", 189, "SetSelectorLimit", "w l", function(s, limit)
+    local d = cpu.sel(s)
+    if not d then return 0 end
+    cpu.setsel(s, d.base, limit)
+    return 0
+end)
+api.const("KERNEL", 113, "__AHSHIFT", 3)
+api.const("KERNEL", 114, "__AHINCR", 8)
+
+-- ---- the system ----------------------------------------------------------------------------
+
+def("KERNEL", 3, "GetVersion", ":l", function() return (0x0500 << 16) | 0x0A03 end)  -- Windows 3.10, DOS 5.0
+def("KERNEL", 132, "GetWinFlags", ":l", function() return 0x0001 | 0x0004 | 0x0020 | 0x0400 end)
+def("KERNEL", 207, "IsDBCSLeadByte", "w", function() return 0 end)
+def("KERNEL", 115, "OutputDebugString", "s:v", function(s) host.log("debug: " .. tostring(s)) end)
+def("KERNEL", 1, "FatalExit", "i:v", function(code) error("FatalExit(" .. code .. ")", 0) end)
+def("KERNEL", 137, "FatalAppExit", "w s:v", function(_, msg) error("FatalAppExit: " .. tostring(msg), 0) end)
+
+-- ---- local atoms ------------------------------------------------------------------------------
+
+local atoms, atomNames, nextAtom = {}, {}, 0xC000
+def("KERNEL", 70, "AddAtom", "r", function(name)
+    if type(name) == "number" then return name end
+    local key = name:upper()
+    if atoms[key] then atoms[key].refs = atoms[key].refs + 1; return atoms[key].atom end
+    local a = nextAtom
+    nextAtom = nextAtom + 1
+    atoms[key] = {atom = a, refs = 1}
+    atomNames[a] = name
+    return a
+end)
+def("KERNEL", 69, "FindAtom", "r", function(name)
+    if type(name) == "number" then return name end
+    local a = atoms[name:upper()]
+    return a and a.atom or 0
+end)
+def("KERNEL", 71, "DeleteAtom", "w", function(a)
+    local name = atomNames[a]
+    if not name then return 0 end
+    local e = atoms[name:upper()]
+    e.refs = e.refs - 1
+    if e.refs <= 0 then atoms[name:upper()] = nil; atomNames[a] = nil end
+    return 0
+end)
+def("KERNEL", 72, "GetAtomName", "w p i", function(a, buf, n)
+    local name = atomNames[a] or (a < 0xC000 and ("#" .. a)) or nil
+    if not name then return 0 end
+    return api.putstr(buf, name, n)
+end)
+
+-- ---- resources ---------------------------------------------------------------------------------
+
+-- FindResource gives a handle to the resource's bytes (kept until
+-- LoadResource copies them into a global block).
+local found = {}
+local nextFound = 1
+def("KERNEL", 60, "FindResource", "h r r", function(inst, name, rtype)
+    local m = kernel.neModule(inst)
+    if not m then return 0 end
+    local data = m:resource(rtype, name)
+    if not data then return 0 end
+    local h = nextFound
+    nextFound = nextFound + 1
+    found[h] = data
+    return h
+end)
+def("KERNEL", 61, "LoadResource", "h h", function(inst, hres)
+    local data = found[hres]
+    if not data then return 0 end
+    local g = kernel.galloc(0x2, #data)
+    if g == 0 then return 0 end
+    mem.write(kernel.glin(g), data)
+    return g
+end)
+def("KERNEL", 63, "FreeResource", "h", function(h)
+    if globals[h] then kernel.gfree(h) end
+    return 0
+end)
+def("KERNEL", 65, "SizeofResource", "h h", function(_, hres) return found[hres] and #found[hres] or 0 end)
 
 -- MakeProcInstance: a small thunk `mov ax, DS / jmp far proc`, in real code.
 local procThunks
@@ -372,7 +539,7 @@ end)
 
 -- OpenFile(name, OFSTRUCT*, style). OFSTRUCT: cBytes, fFixedDisk, nErrCode,
 -- reserved[4], szPathName[128].
-def("KERNEL", 74, "OpenFile", "s p w", function(name, of, style)
+def("KERNEL", 74, "OpenFile", "s p w", function(name, of, style, R)
     local OF_PARSE, OF_DELETE, OF_EXIST, OF_CREATE, OF_REOPEN = 0x100, 0x200, 0x4000, 0x1000, 0x8000
     if style & OF_REOPEN ~= 0 and of then name = mem.cstr(of + 8) end
     if not name then return HFILE_ERROR end
@@ -412,49 +579,226 @@ def("KERNEL", 74, "OpenFile", "s p w", function(name, of, style)
     return h or HFILE_ERROR
 end)
 
--- ---- modules -------------------------------------------------------------------------------------
+-- ---- modules ----------------------------------------------------------------------------------
 
--- Module handles for the system DLLs, so GetModuleHandle / LoadLibrary /
--- GetProcAddress work against the Win16 layer's functions.
-local modHandles = {}
-local function moduleHandle(name)
-    name = name:upper():gsub("%.%a+$", ""):gsub("^.*\\", "")
+-- The system DLLs are the Win16 layer's own (Lua) functions; any other
+-- module (a .CPL applet, COMMDLG.DLL, VER.DLL, ...) is the real 16-bit file,
+-- loaded, relocated and started like Windows' loader does.
+--
+-- kernel.instances: hInstance or hModule -> {name=, mod=, inst=, hModule=,
+-- hInstance=, path=, refs=}; kernel.byName: module name -> the same.
+kernel.instances = {}
+kernel.byName = {}
+
+-- Lua modules: a handle per name, so GetModuleHandle / GetProcAddress work
+local function luaModule(name)
     if name == "KRNL386" or name == "KRNL286" then name = "KERNEL" end
     if not api.byOrd[name] then return nil end
-    if not modHandles[name] then
-        modHandles[name] = kernel.galloc(0, 16)
-        kernel.modules[modHandles[name]] = name
+    local m = kernel.byName[name]
+    if not m then
+        local h = kernel.galloc(0, 16)
+        m = {name = name, lua = true, hModule = h, hInstance = h, refs = 1}
+        kernel.byName[name] = m
+        kernel.instances[h] = m
+        kernel.modules[h] = name
     end
-    return modHandles[name]
+    return m
 end
-kernel.moduleHandle = moduleHandle
+
+local function baseName(name)
+    return (name:upper():gsub("^.*[\\/:]", ""):gsub("%.%w*$", ""))
+end
+
+-- Finds a module's file: as given, then in the Windows and System
+-- directories, then the Windows 3.1 files themselves.
+local function readModuleFile(name)
+    local tries = {}
+    if name:find("[\\:]") then tries[#tries + 1] = name end
+    local file = name:gsub("^.*[\\/:]", "")
+    if not file:find("%.") then file = file .. ".DLL" end
+    tries[#tries + 1] = dosfs.windows .. "\\" .. file
+    tries[#tries + 1] = dosfs.system .. "\\" .. file
+    for _, t in ipairs(tries) do
+        local data = dosfs.read(t)
+        if data then return data, dosfs.full(t) end
+    end
+    local boot = require("boot")
+    local data = kernel.dataDir and boot.dataFile(kernel.dataDir, file:upper())
+    if data then return data, dosfs.system .. "\\" .. file:upper() end
+end
+
+local loadModule
+
+-- The loader's resolver for every module: Lua functions for the system
+-- DLLs, entry points of loaded 16-bit modules for the rest.
+function kernel.resolve(modName, ord, name)
+    if api.byOrd[modName] or modName == "KRNL386" then return api.resolve(modName == "KRNL386" and "KERNEL" or modName, ord, name) end
+    local m = kernel.byName[modName] or loadModule(modName)
+    if not m or m.lua then
+        error(string.format("import %s.%s: no such module", modName, ord or name), 0)
+    end
+    if not ord then
+        ord = m.mod.names[name:upper()]
+        if not ord then error(string.format("import %s.%s: no such export", modName, name), 0) end
+    end
+    return m.inst.entryAddr(ord)
+end
+
+-- Loads (or finds) a 16-bit module and runs its LibEntry. Returns the record.
+loadModule = function(name)
+    local key = baseName(name)
+    local m = kernel.byName[key] or luaModule(key)
+    if m then m.refs = m.refs + 1; return m end
+    local data, path = readModuleFile(name)
+    if not data then return nil, 2 end
+    local mod, err = require("recomp.ne").parse(data, path)
+    if not mod then host.log("Win16: " .. path .. ": " .. tostring(err)); return nil, 11 end
+    if mod.flags & 0x8000 == 0 then return nil, 11 end    -- a program, not a library
+    m = {name = mod.name or key, mod = mod, path = path, refs = 1}
+    kernel.byName[key] = m
+    if mod.name and mod.name ~= key then kernel.byName[mod.name] = m end
+    local inst = require("recomp.loader").load(mod, kernel.resolve)
+    m.inst = inst
+    m.hModule = kernel.galloc(0, 16)
+    m.hInstance = inst.dgroup or m.hModule
+    kernel.instances[m.hModule] = m
+    kernel.instances[m.hInstance] = m
+    kernel.modules[m.hModule] = m.name
+    if inst.dgroup then
+        local dseg = mod.segments[mod.autoData]
+        -- the static data and its uninitialized part: a heap goes after both
+        m.dataEnd = math.max(dseg.length, dseg.minalloc < 0x10000 and dseg.minalloc or 0, 16)
+        kernel.instances[inst.dgroup] = m
+    end
+    host.log(string.format("Win16: loaded %s (%d segments, %d imports)", path, #mod.segments, inst.stats.imports))
+    if api.trace then
+        local t = {}
+        for i, sel in ipairs(inst.sels) do t[#t + 1] = string.format("%d=%04X", i, sel) end
+        host.log("  selectors " .. table.concat(t, " "))
+    end
+    -- LibEntry: DI = hInstance, DS = DGROUP, CX = heap size, ES:SI = command line
+    if mod.cs ~= 0 then
+        local R = kernel.task.R
+        local ax = cpu.call16(R, inst.sels[mod.cs], mod.ip, {}, {
+            di = m.hInstance, ds = inst.dgroup or 0, cx = mod.heap, si = 0, es = 0})
+        if ax == 0 then host.log("Win16: " .. m.name .. "'s LibEntry failed") end
+    end
+    return m
+end
+kernel.loadModule = loadModule
+
+-- Starts another Windows program (WinExec of CONTROL.EXE, ...) as a task
+-- beside the running ones. Returns its hInstance, or an error code < 32.
+function kernel.exec(path, cmdLine, show)
+    local file = path:upper():gsub("^.*[\\:]", "")
+    local data = dosfs.read(path)
+    if not data and kernel.dataDir then data = require("boot").dataFile(kernel.dataDir, file) end
+    if not data then return 2 end
+    local mod = require("recomp.ne").parse(data, file)
+    if not mod then return 11 end
+    if mod.flags & 0x8000 ~= 0 then return 11 end
+    local tasks = require("win16.tasks")
+    local prev = kernel.task
+    local task
+    local ok, err = pcall(require("recomp.loader").load, mod, kernel.resolve, {program = true, beforeRelocs = function(inst)
+        task = kernel.startTask(inst, {path = dosfs.full(path), cmdShow = show or 1, cmdLine = cmdLine or ""})
+        tasks.switch(task)
+    end})
+    tasks.switch(prev)
+    if not ok then
+        host.log("Win16: " .. file .. ": " .. tostring(err))
+        return 11
+    end
+    tasks.add(task)
+    host.log("Win16: started " .. file)
+    return task.hInstance
+end
+
+-- hInstance/hModule (or a module name) -> the record
+function kernel.moduleOf(h)
+    if type(h) == "string" then return kernel.byName[baseName(h)] end
+    return kernel.instances[h]
+end
+
+-- The parsed NE module behind an instance handle (the task's when it's 0 or
+-- the task's own).
+function kernel.neModule(h)
+    local t = kernel.task
+    if not h or h == 0 or (t and (h == t.hInstance or h == t.dgroup)) then return t and t.module end
+    local m = kernel.instances[h]
+    if m and m.mod then return m.mod end
+    return t and t.module
+end
+
+-- A module that is only resources here (the display driver): GetModuleHandle
+-- and FindResource reach it.
+function kernel.addResourceModule(name, mod)
+    if not mod or kernel.byName[name] then return end
+    local h = kernel.galloc(0, 16)
+    local m = {name = name, mod = mod, hModule = h, hInstance = h, refs = 1, resourcesOnly = true}
+    kernel.byName[name] = m
+    kernel.instances[h] = m
+    kernel.modules[h] = name
+end
+
+kernel.moduleHandle = function(name)
+    local m = luaModule(baseName(name))
+    return m and m.hModule
+end
 
 def("KERNEL", 95, "LoadLibrary", "s", function(name)
     if not name then return 2 end
-    local h = moduleHandle(name)
-    return h or 2   -- 2: file not found
+    local m, err = loadModule(name)
+    if not m then return err or 2 end
+    return m.hInstance
 end)
-def("KERNEL", 96, "FreeLibrary", "h:v", function() end)
-def("KERNEL", 47, "GetModuleHandle", "r", function(name)
-    if type(name) ~= "string" then return kernel.task.hInstance end
-    if name:upper():gsub("%.EXE$", "") == "PROGMAN" then return kernel.task.hInstance end
-    return moduleHandle(name) or 0
+def("KERNEL", 96, "FreeLibrary", "h:v", function(h)
+    local m = kernel.instances[h]
+    if m then m.refs = math.max(m.refs - 1, 0) end
+end)
+def("KERNEL", 47, "GetModuleHandle", "r", function(name, R)
+    local t = kernel.task
+    if type(name) ~= "string" then
+        -- a selector: the module whose data or code it is
+        local m = kernel.instances[name]
+        if m then return m.hModule end
+        return t.hInstance
+    end
+    local key = baseName(name)
+    if t.module.name and key == t.module.name then return t.hInstance end
+    local m = kernel.byName[key] or luaModule(key)
+    return m and m.hModule or 0
+end)
+def("KERNEL", 48, "GetModuleUsage", "h", function(h)
+    local m = kernel.instances[h]
+    return m and m.refs or 1
 end)
 def("KERNEL", 50, "GetProcAddress", "h r:l", function(h, name)
-    local m = kernel.modules[h]
-    if not m then return 0 end
+    local m = kernel.instances[h]
+    if m and m.resourcesOnly then return 0 end
+    if m and m.mod then
+        local ord = type(name) == "number" and name or m.mod.names[name:upper()]
+        if not ord or not m.mod.entries[ord] then return 0 end
+        local sel, off = m.inst.entryAddr(ord)
+        return ((sel or 0) << 16) | off
+    end
+    local mn = m and m.name or kernel.modules[h]
+    if not mn then return 0 end
     local d
-    if type(name) == "number" then d = api.byOrd[m][name] else d = api.byName[m .. "." .. name:upper()] end
+    if type(name) == "number" then d = api.byOrd[mn][name] else d = api.byName[mn .. "." .. name:upper()] end
     if not d then
-        host.log("Win16: GetProcAddress(" .. m .. ", " .. tostring(name) .. "): not in the Win16 layer")
+        host.log("Win16: GetProcAddress(" .. mn .. ", " .. tostring(name) .. "): not in the Win16 layer")
         return 0
     end
-    local sel, off = api.resolve(m, d.ord, d.name)
+    local sel, off = api.resolve(mn, d.ord, d.name)
     return ((sel or 0) << 16) | off
 end)
 def("KERNEL", 49, "GetModuleFileName", "h p i", function(h, buf, size)
-    local name = kernel.modules[h]
-    local path = name and (dosfs.system .. "\\" .. name .. ".DLL") or kernel.task.path
+    local m = kernel.instances[h]
+    local path
+    if m and m.path then path = m.path
+    elseif m then path = dosfs.system .. "\\" .. m.name .. ".DLL"
+    else path = kernel.task.path end
     return api.putstr(buf, path, size)
 end)
 
@@ -500,6 +844,9 @@ end
 local function dos(R)
     local ah = R.ax >> 8
     local al = R.ax & 0xFF
+    if api.trace then
+        host.log(string.format("  INT 21h AX=%04X BX=%04X CX=%04X DX=%04X DS=%04X ES=%04X", R.ax, R.bx, R.cx, R.dx, R.ds, R.es))
+    end
     if ah == 0x30 then          -- version: 5.0
         R.ax = 0x0005; R.bx = 0; R.cx = 0
     elseif ah == 0x19 then      -- current drive
@@ -566,11 +913,25 @@ local function dos(R)
         local clusters = math.min(free // 32768, 0xFFFF)
         R.ax = 64; R.bx = clusters; R.cx = 512; R.dx = 0xFFFF
     elseif ah == 0x2A then
-        local t = os.date("*t")
+        local t = os.date("*t", os.time() + kernel.clockOffset)
         R.cx = t.year; R.dx = (t.month << 8) | t.day; R.ax = (R.ax & 0xFF00) | (t.wday - 1)
     elseif ah == 0x2C then
-        local t = os.date("*t")
+        local t = os.date("*t", os.time() + kernel.clockOffset)
         R.cx = (t.hour << 8) | t.min; R.dx = (t.sec << 8)
+    elseif ah == 0x2B or ah == 0x2D then
+        -- setting the date or time (Control Panel's Date/Time): this machine's
+        -- clock is left alone; Windows here runs that far ahead or behind
+        local now = os.time()
+        local t = os.date("*t", now + kernel.clockOffset)
+        if ah == 0x2B then t.year, t.month, t.day = R.cx, R.dx >> 8, R.dx & 0xFF
+        else t.hour, t.min, t.sec = R.cx >> 8, R.cx & 0xFF, R.dx >> 8 end
+        local ok, want = pcall(os.time, t)
+        if ok and want then
+            kernel.clockOffset = want - now
+            R.ax = R.ax & 0xFF00
+        else
+            R.ax = (R.ax & 0xFF00) | 0xFF
+        end
     elseif ah == 0x44 then      -- ioctl: get device info: a file on drive C
         R.dx = 0x0002; setCarry(R, nil)
     elseif ah == 0x57 then      -- file date and time: get (AL=0) from the file, set (AL=1) accepted
@@ -601,6 +962,41 @@ local function dos(R)
 end
 kernel.dos = dos
 cpu.ints[0x21] = dos
+
+-- The virtual devices 386 Enhanced asks for (VCD 0x0E, the COM ports;
+-- VPD 0x0F, the printer ports; SHELL 0x17): their protected-mode APIs
+-- answer as a machine whose ports are all free. The function is in DX:
+-- 0 asks for the version, VCD's 1 for the ports there are (COM1-COM4).
+local vxdApis = {}
+function kernel.vxdEntry(id)
+    if id ~= 0x0E and id ~= 0x0F and id ~= 0x17 then return 0 end
+    if not vxdApis[id] then
+        vxdApis[id] = api.farproc("VxD" .. id, ":v", function(R)
+            local fn = R.dx
+            if api.trace then host.log(string.format("  VxD %02X AX=%04X BX=%04X CX=%04X DX=%04X", id, R.ax, R.bx, R.cx, R.dx)) end
+            R.cf = false
+            if fn == 0 then R.ax = 0x030A
+            elseif id == 0x0E and fn == 1 then R.ax = 0x000F
+            else R.ax = 0 end
+        end)
+    end
+    return vxdApis[id]
+end
+
+-- INT 2Fh, the multiplex interrupt: Windows answers as itself (enhanced
+-- mode 3.10) and has no virtual devices to offer.
+cpu.ints[0x2F] = function(R)
+    local ax = R.ax
+    if api.trace then host.log(string.format("  INT 2Fh AX=%04X BX=%04X", R.ax, R.bx)) end
+    if ax == 0x1600 then R.ax = 0x0A03          -- enhanced mode, version 3.10
+    elseif ax == 0x1683 then R.bx = 1           -- the system VM
+    elseif ax == 0x1684 then                    -- a virtual device's API entry point
+        local fp = kernel.vxdEntry(R.bx)
+        cpu.setseg(R, "es", fp >> 16); R.di = fp & 0xFFFF
+    elseif ax == 0x1689 then -- kernel idle
+    elseif (ax >> 8) == 0x16 then -- other Windows calls: nothing to report
+    else R.ax = ax & 0xFF00 end                 -- no multiplex handler installed
+end
 
 -- DOS3Call: INT 21h with the registers as they are (no stack arguments).
 def("KERNEL", 102, "DOS3Call", ":v", function(R)
