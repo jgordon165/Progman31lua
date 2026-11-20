@@ -19,7 +19,7 @@ local BLACK, SHADOW, BG = 0x000000, 0x3F87A3, 0x3DA0C7
 -- MICROSOFT's are 29 rows (212..240)
 local SMALLCAP_SCALE = 33 / 29
 local BASELINE = 285
-local CUT = 158          -- everything right of WIN's N is replaced
+local N_RIGHT = 150      -- last column of WIN's N
 
 -- R E T R O as W o r k s on the Microsoft Works box: pink, teal, lavender, magenta, orange
 logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
@@ -28,6 +28,7 @@ logo.RETRO_COLORS = {0xC9679A, 0x83C9C4, 0xA698C0, 0xC91053, 0xEE9D68}
 -- (plain black small serif): MS Serif at this point size
 -- (plain black small serif): MS Serif at this point size; FOOTER_SCRIPT is
 -- set apart in raised gold letters in Windows 3.1's Script font (SCRIPT.FON)
+logo.RETRO_GAP = 1             -- pixels between WIN's N and RETRO's R
 logo.FOOTER = {"WITH ", "Fatals", " ENTERTAINMENT PACK"}
 logo.FOOTER_SCRIPT = 2          -- which part is in script
 logo.FOOTER_POINTS = 10
@@ -416,8 +417,12 @@ function logo.rebrand(id, w, h, fontBytes, scriptBytes)
     local O = grab(img, 183, 245, 212, 292)
     local E = eFromF(F, 10, 11)
     R, E, T = scale(R, SMALLCAP_SCALE), scale(E, SMALLCAP_SCALE), scale(T, SMALLCAP_SCALE)
-    erase(img, CUT, 243, 340, 300)
-    local x = CUT + 4
+    -- WIN's N ends at N_RIGHT (its stem's top serif); the old D's top serif
+    -- runs into it and a sliver of its stem was left showing, so everything after
+    -- the N goes
+    erase(img, N_RIGHT + 1, 243, 340, 300)
+    local nRight = N_RIGHT
+    local x = nRight + 1 + logo.RETRO_GAP
     local colors = logo.RETRO_COLORS
     for i, g in ipairs({R, E, T, R}) do
         paste(img, g, x, BASELINE, colors and colors[i])
