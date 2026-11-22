@@ -45,6 +45,11 @@ int main(int argc, char** argv) {
         SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
         SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
     }
+#ifdef _WIN32
+    // The window's icon: the executable's own (src/progman31lua.rc).
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER) != 0) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;

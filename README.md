@@ -1,5 +1,7 @@
 # Progman31lua
 
+<img src="assets/progman31lua.png" width="96" align="right" alt="Progman31lua's icon">
+
 [![CI-build](https://github.com/jgordon165/Progman31lua/actions/workflows/ci-build.yml/badge.svg)](https://github.com/jgordon165/Progman31lua/actions/workflows/ci-build.yml)
 [![code-analysis](https://github.com/jgordon165/Progman31lua/actions/workflows/code-analysis.yml/badge.svg)](https://github.com/jgordon165/Progman31lua/actions/workflows/code-analysis.yml)
 
@@ -81,6 +83,10 @@ git-ignored, and release packages are checked for them.
 Not there yet: Windows Help (`.HLP`), dropping files from Explorer onto a
 group, and the other Windows 3.1 accessories on the recompiler (the way
 Control Panel runs; `*` in `[Programs]` asks for that).
+
+## Icon
+
+`assets/progman31lua.ico` is the app's own icon, an original drawing (not Microsoft's): a retro monitor showing three launcher tiles. `tools/make_icon.py` draws it at every size from 16 to 256 px. The Windows build carries it in the executable, so it shows in Explorer, on shortcuts and on the window.
 
 ## Build
 
