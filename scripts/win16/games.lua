@@ -258,11 +258,35 @@ function games.readGroup(dos)
         local off = string.unpack("<I2", data, at + 1)
         if off > 0 and off + 24 <= #data then
             local pName, pCommand = string.unpack("<I2I2", data, off + 19)
-            g.items[#g.items + 1] = {name = str(pName), command = str(pCommand)}
+            -- the icon's colour plane, as DumpIcon gave it to Program Manager
+            local cbPlane, _, _, pPlane = string.unpack("<I2I2I2I2", data, off + 9)
+            g.items[#g.items + 1] = {name = str(pName), command = str(pCommand),
+                                     xor = pPlane > 0 and data:sub(pPlane + 1, pPlane + cbPlane) or nil}
         end
     end
     return g
 end
+
+-- The colour plane of the icon an item for `command` would get now (nil if
+-- none can be found), to tell a stale icon in the group file.
+local function iconPlane(command)
+    local shell = require("win16.shell")
+    local kernel = require("win16.kernel")
+    local h = shell.extractIcon(command, 0)
+    if not h or h <= 1 then return nil end
+    local lin = kernel.glin(h)
+    local plane
+    if lin then
+        -- the internal icon: a 12-byte header (w, h, bytes per row, planes,
+        -- bits) and the AND mask, then the colour plane
+        local w, hgt, wb = string.unpack("<I2I2I2", mem.read(lin + 4, 6))
+        local andSize = ((w + 15) // 16) * 2 * hgt
+        plane = mem.read(lin + 12 + andSize, wb * hgt)
+    end
+    if kernel.gfree then kernel.gfree(h) end
+    return plane
+end
+games.iconPlane = iconPlane
 
 -- A DDE argument: quoted when it holds anything the command parser splits on.
 local function arg(s)
@@ -290,7 +314,14 @@ function games.syncCommands()
             local c = dosfs.full((it.command:match('^"([^"]*)"') or it.command:match("^(%S*)")) or "")
             local exe = c:match("([^\\]+)$") or ""
             local ours = c:sub(1, #mount) == mount
-            if (ours and not (want[c] and want[c].name == it.name)) or (not ours and games.SETUP_ITEMS[exe]) then
+            local stale = ours and want[c] and want[c].name == it.name and it.xor
+            if stale then
+                -- an icon that has changed since (or that couldn't be read then)
+                local now = iconPlane(want[c].command)
+                stale = now ~= nil and now ~= it.xor
+            end
+            if stale or (ours and not (want[c] and want[c].name == it.name)) or
+                (not ours and games.SETUP_ITEMS[exe]) then
                 cmds[#cmds + 1] = "[DeleteItem(" .. arg(it.name) .. ")]"
                 changed = true
             elseif ours then
