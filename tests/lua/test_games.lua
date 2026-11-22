@@ -39,6 +39,8 @@ elseif phase == "sync" then
     fixture.rmtree(folder .. sep .. "Raptor")
     host.mkdir(folder .. sep .. "Tetris")
     host.write(folder .. sep .. "Tetris" .. sep .. "Tetris.lnk", fixture.lnk("C:\\Games\\Tetris\\tetrispack.exe"))
+    -- One Must Fall's icon changes: red to blue (the item keeps its name)
+    host.write(folder .. sep .. "One Must Fall 2097" .. sep .. "omf.ico", fixture.ico(0x0000E0))
 elseif phase == "plain" then
     fixture.rmtree(folder)
 elseif phase == "upgrade" then
@@ -85,6 +87,9 @@ elseif phase == "sync" then
     check("Tetris was added", items["Tetris"] == "C:\\WINDOWS\\GAMES\\TETRIS\\TETRIS.LNK", names())
     check("One Must Fall 2097 stays", items["One Must Fall 2097"] ~= nil, names())
     check("three items", #g.items == 3, names())
+    local data = host.read(win .. "GAMES.GRP", false) or ""
+    check("a changed icon is updated", data:find(string.rep("\204", 8), 1, true) ~= nil and
+        not data:find(string.rep("\153", 8), 1, true), "One Must Fall's icon is still red")
 elseif phase == "plain" then
     check("Setup's Solitaire without a games folder", items["Solitaire"] ~= nil, names())
 end
