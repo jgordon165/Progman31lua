@@ -77,6 +77,7 @@ if(MSVC)
 endif()
 if(WIN32)
     target_link_libraries(progman31lua PRIVATE shell32)
+    target_sources(progman31lua PRIVATE src/progman31lua.rc)   # the icon, assets/progman31lua.ico
 endif()
 
 # Copy Lua scripts next to the binary on every build, so script edits are
