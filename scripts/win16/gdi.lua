@@ -155,7 +155,14 @@ gdi.fontObj = fontObj
 -- Text on a DC at logical (x, y), top-left aligned.
 function gdi.textOut(dc, x, y, s, opaqueRect, clipRect)
     local f = fontObj(dc)
+    if f.symbol then return gdi.symbolText(dc, f, x, y, s, opaqueRect, clipRect) end
     if not f.rf then return 0 end
+    local a = dc.align or 0               -- SetTextAlign
+    if a ~= 0 then
+        local tw = fb.text_width(f.rf.fid, s, f.bold)
+        if a & 6 == 6 then x = x - tw // 2 elseif a & 2 ~= 0 then x = x - tw end
+        if a & 24 == 24 then y = y - f.rf.m.ascent elseif a & 8 ~= 0 then y = y - f.rf.m.height end
+    end
     if not useClip(dc, clipRect) then return fb.text_width(f.rf.fid, s, f.bold) end
     if opaqueRect then
         fb.patblt(dc.surface, opaqueRect[1] + dc.ox, opaqueRect[2] + dc.oy, opaqueRect[3] - opaqueRect[1],
@@ -167,12 +174,14 @@ end
 
 function gdi.textWidth(dc, s)
     local f = fontObj(dc)
+    if f.symbol then return #s * f.em end
     if not f.rf then return #s * 8 end
     return fb.text_width(f.rf.fid, s, f.bold)
 end
 
 function gdi.fontHeight(dc)
     local f = fontObj(dc)
+    if f.symbol then return f.em end
     return f.rf and f.rf.m.height or 16
 end
 
@@ -218,8 +227,11 @@ def("GDI", 57, "CreateFontIndirect", "p", function(lf)
     local req = {height = s16(rw(lf)), weight = s16(rw(lf + 8)), italic = rb(lf + 10) ~= 0,
                  underline = rb(lf + 11) ~= 0, pitch = rb(lf + 17), face = mem.cstr(lf + 18, 32)}
     local rf = gdi.matchFont(req)
-    return newObj({kind = "font", rf = rf, bold = req.weight >= 600 and rf and rf.m.weight < 600,
-                   underline = req.underline, req = req})
+    local f = {kind = "font", rf = rf, bold = req.weight >= 600 and rf and rf.m.weight < 600,
+               underline = req.underline, req = req}
+    -- the one TrueType font drawn here: Wingdings (gdidraw.lua)
+    if gdi.symbolFont then gdi.symbolFont(f, req) end
+    return newObj(f)
 end)
 
 def("GDI", 69, "DeleteObject", "h", function(h)
@@ -348,6 +360,7 @@ def("GDI", 34, "BitBlt", "h i i i i h i i l", function(hdst, x, y, w, h, hsrc, s
     local text, bk = d.text, d.bk
     if not smono and dmono then bk = s.bk end
     fb.bitblt(d.surface, x + d.ox, y + d.oy, w, h, s.surface, sx + s.ox, sy + s.oy, r3, b, text, bk)
+    if gdi.onImage then gdi.onImage(d, x, y, w, h) end
     return 1
 end)
 
@@ -518,6 +531,7 @@ function gdi.drawIcon(dc, x, y, lin, dw, dh)
     if not s then return false end
     if not useClip(dc) then return true end
     dw, dh = dw or s.w, dh or s.h
+    if gdi.onImage then gdi.onImage(dc, x, y, dw, dh) end
     if dw == s.w and dh == s.h then
         fb.bitblt(dc.surface, x + dc.ox, y + dc.oy, s.w, s.h, s["and"], 0, 0, 0x88, 0, 0, 0xFFFFFF)
         useClip(dc)

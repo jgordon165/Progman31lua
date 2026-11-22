@@ -45,6 +45,17 @@ git-ignored, and release packages are checked for them.
   the date or time moves Windows' clock only, never your computer's.
   `CONTROL.INI` and `SYSTEM.INI` come from your setup disks' templates,
   as Setup made them.
+- **Screen savers**: Control Panel's Desktop lists your `.SCR` savers
+  (Blank Screen, Flying Windows, Marquee, Starfield Simulation) and Test
+  and Setup run them, recompiled. Desktop's choice goes to `SYSTEM.INI`
+  and its delay to `WIN.INI`, as in Windows 3.1: after that long without
+  input, the saver starts, and a key or a mouse move ends it. Flying
+  Windows' windows are Wingdings' flag character; there is no TrueType
+  here, so that one character is drawn as shapes, at any size.
+- **Right-click menus**: not in Windows 3.1, but a right click on an icon
+  selects it and offers Open, Move, Copy, Delete and Properties, and on a
+  group's empty space New and Arrange Icons. Each is Program Manager's
+  own command from its File or Window menu.
 - **Starting programs**: the other Windows 3.1 programs can't run on 64-bit
   Windows yet, so each starts its modern counterpart (Notepad, Calculator,
   Paint, File Explorer, Control Panel, ...). The map is `[Programs]` in
@@ -57,7 +68,8 @@ git-ignored, and release packages are checked for them.
   program. Put a folder in it for each game with a shortcut inside
   (`games\Raptor\Raptor.lnk`); Windows shortcuts (`.lnk`) and Internet
   shortcuts (`.url`, as Steam makes them) up to four folders down each
-  become an item, named after the shortcut and with its icon, and running
+  become an item, named after the shortcut and with its icon (modern
+  programs' PNG icons included, scaled to 32x32 and 16 colours), and running
   the item opens the shortcut. Program Manager sees the folder as
   `C:\WINDOWS\GAMES`, long names as 8.3 aliases
   (`C:\WINDOWS\GAMES\ONEMUS~1\ONEMUS~1.LNK`). Each start brings the group

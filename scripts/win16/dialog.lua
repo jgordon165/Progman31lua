@@ -510,7 +510,17 @@ end
 dialog.item = item
 
 def("USER", 91, "GetDlgItem", "h i", function(h, id) local c = item(h, id & 0xFFFF); return c and c.handle or 0 end)
-def("USER", 95, "GetDlgCtrlID", "h", function(h) local w = W(h); return w and w.id or 0 end)
+-- (GetDlgCtrlID is USER 277; 95 is GetDlgItemInt)
+def("USER", 95, "GetDlgItemInt", "h i f w", function(h, id, fpOk, signed)
+    local c = item(h, id & 0xFFFF)
+    local okp = cpu.flat(fpOk)
+    local text = c and c.text or ""
+    local n = tonumber(text:match("^%s*([%+%-]?%d+)%s*$") or "")
+    local ok = n ~= nil and (signed ~= 0 and n >= -32768 and n <= 32767 or signed == 0 and n >= 0 and n <= 65535)
+    if okp then mem.ww(okp, ok and 1 or 0) end
+    if not ok then return 0 end
+    return n & 0xFFFF
+end)
 def("USER", 92, "SetDlgItemText", "h i f:v", function(h, id, fp)
     local c = item(h, id & 0xFFFF)
     if c then user.send(c, WM.SETTEXT, 0, fp) end

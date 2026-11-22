@@ -25,6 +25,15 @@ local function hw(w) return w and w.handle or 0 end
 
 -- ---- capture ------------------------------------------------------------------------------------
 
+-- the time and mouse position (screen savers)
+def("USER", 15, "GetCurrentTime", ":l", function() return (host.ticks() - user.started) & 0xFFFFFFFF end)
+def("USER", 17, "GetCursorPos", "p:v", function(p)
+    if p then mem.ww(p, user.mouseX & 0xFFFF); mem.ww(p + 2, user.mouseY & 0xFFFF) end
+end)
+def("USER", 70, "SetCursorPos", "i i:v", function(x, y)
+    user.mouseX, user.mouseY = x, y
+    if host.warp_mouse then host.warp_mouse(x, y) end
+end)
 def("USER", 18, "SetCapture", "h", function(h)
     local old = user.capture
     user.capture = W(h)

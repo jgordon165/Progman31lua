@@ -101,6 +101,8 @@ if(PROGMAN31LUA_TESTS)
 
     add_test(NAME recomp COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
              --test ${CMAKE_SOURCE_DIR}/tests/lua/test_recomp.lua)
+    add_test(NAME png COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
+             --test ${CMAKE_SOURCE_DIR}/tests/lua/test_png.lua)
     add_test(NAME boot COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
              --data ${CMAKE_BINARY_DIR}/no-such-folder --exit-after 1500)
     if(DEFINED ENV{PROGMAN31LUA_DATA})
@@ -109,6 +111,9 @@ if(PROGMAN31LUA_TESTS)
                  --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-home --fresh
                  --test ${CMAKE_SOURCE_DIR}/tests/lua/test_progman.lua)
         # Control Panel: the original CONTROL.EXE and its applets as a second task
+        add_test(NAME screensaver COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
+                 --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-screensaver --fresh
+                 --test ${CMAKE_SOURCE_DIR}/tests/lua/test_screensaver.lua)
         add_test(NAME control COMMAND progman31lua --headless --scripts ${CMAKE_SOURCE_DIR}/scripts
                  --data $ENV{PROGMAN31LUA_DATA} --home ${CMAKE_BINARY_DIR}/test-control-home --fresh
                  --test ${CMAKE_SOURCE_DIR}/tests/lua/test_control.lua)
