@@ -174,7 +174,7 @@ local function fillPoly(dc, pts, brush)
     if not brush or #pts < 3 then return end
     local miny, maxy = math.huge, -math.huge
     for _, p in ipairs(pts) do miny = math.min(miny, p[2]); maxy = math.max(maxy, p[2]) end
-    for y = miny, maxy - 1 do
+    for y = math.floor(miny), math.ceil(maxy) - 1 do
         local xs = {}
         local yc = y + 0.5
         for i = 1, #pts do
@@ -189,6 +189,87 @@ local function fillPoly(dc, pts, brush)
             if x1 > x0 then fb.patblt(dc.surface, x0 + dc.ox, y + dc.oy, x1 - x0, 1, 0xF0, brush) end
         end
     end
+end
+
+-- ---- Wingdings ------------------------------------------------------------------------------------
+-- The raster fonts are what there is, apart from Wingdings' Windows flag
+-- (character 0xFF), which Flying Windows draws its windows with: drawn
+-- here as shapes, at any size. Other Wingdings characters draw nothing.
+
+-- The flag in a 1x1 em box (y down): four waving panes and, behind them,
+-- the trail of small squares.
+local function flagShapes()
+    local shapes = {}
+    local function wave(x) return 0.06 * math.sin((x - 0.32) / 0.66 * math.pi * 1.5) end
+    local function pane(x0, x1, y0, y1)
+        local pts, steps = {}, 6
+        for i = 0, steps do
+            local x = x0 + (x1 - x0) * i / steps
+            pts[#pts + 1] = {x, y0 + wave(x)}
+        end
+        for i = steps, 0, -1 do
+            local x = x0 + (x1 - x0) * i / steps
+            pts[#pts + 1] = {x, y1 + wave(x)}
+        end
+        shapes[#shapes + 1] = pts
+    end
+    local gap = 0.05
+    local xl, xm, xr = 0.32, 0.64, 0.98
+    local yt, ym, yb = 0.14, 0.50, 0.86
+    pane(xl, xm - gap / 2, yt, ym - gap / 2)
+    pane(xm + gap / 2, xr, yt, ym - gap / 2)
+    pane(xl, xm - gap / 2, ym + gap / 2, yb)
+    pane(xm + gap / 2, xr, ym + gap / 2, yb)
+    -- the trail: squares growing towards the flag, two rows
+    local trail = {{0.04, 0.04}, {0.12, 0.06}, {0.21, 0.08}}
+    for _, row in ipairs({{yt, ym - gap / 2}, {ym + gap / 2, yb}}) do
+        local cy = (row[1] + row[2]) / 2
+        for _, t in ipairs(trail) do
+            local x, sz = t[1], t[2]
+            local y = cy + wave(x) - sz / 2
+            shapes[#shapes + 1] = {{x, y}, {x + sz, y}, {x + sz, y + sz}, {x, y + sz}}
+        end
+    end
+    return shapes
+end
+local FLAG = flagShapes()
+
+function gdi.symbolFont(f, req)
+    if (req.face or ""):upper() ~= "WINGDINGS" then return end
+    local h = req.height or 0
+    f.symbol = "Wingdings"
+    -- a negative height is the character height; a positive one the cell's
+    f.em = h < 0 and -h or (h > 0 and math.floor(h * 0.9 + 0.5) or 16)
+    f.em = math.max(f.em, 1)
+end
+
+function gdi.symbolText(dc, f, x, y, s, opaqueRect, clipRect)
+    local em = f.em
+    local width = #s * em
+    local a = dc.align or 0
+    if a & 6 == 6 then x = x - width // 2 elseif a & 2 ~= 0 then x = x - width end
+    if a & 24 == 24 then y = y - math.floor(em * 0.9) elseif a & 8 ~= 0 then y = y - em end
+    if not gdi.useClip(dc, clipRect) then return width end
+    if opaqueRect then
+        fb.patblt(dc.surface, opaqueRect[1] + dc.ox, opaqueRect[2] + dc.oy, opaqueRect[3] - opaqueRect[1],
+            opaqueRect[4] - opaqueRect[2], 0xF0, dc.bk)
+    elseif dc.bkMode == 2 then
+        fb.patblt(dc.surface, x + dc.ox, y + dc.oy, width, em, 0xF0, dc.bk)
+    end
+    for i = 1, #s do
+        if s:byte(i) == 0xFF then
+            local gx = x + (i - 1) * em
+            for _, shape in ipairs(FLAG) do
+                local pts = {}
+                for k, p in ipairs(shape) do pts[k] = {gx + p[1] * em, y + p[2] * em} end
+                if em < 6 then
+                    for k, p in ipairs(pts) do pts[k] = {math.floor(p[1] + 0.5), math.floor(p[2] + 0.5)} end
+                end
+                fillPoly(dc, pts, dc.text)
+            end
+        end
+    end
+    return width
 end
 
 local function outlinePoly(dc, pts, p)
@@ -469,9 +550,9 @@ def("GDI", 350, "GetCharWidth", "h w w p", function(hdc, first, last, buf)
     end
     return 1
 end)
--- No TrueType here: the raster fonts are what there is
+-- TrueType "enabled": only for Wingdings, below (Flying Windows asks)
 def("GDI", 313, "GetRasterizerCaps", "p w", function(lp, n)
-    if lp and n >= 4 then mem.write(lp, string.pack("<I2I2I2", 6, 0, 0):sub(1, n)) end
+    if lp and n >= 4 then mem.write(lp, string.pack("<I2I2I2", 6, 3, 0):sub(1, n)) end
     return 1
 end)
 def("GDI", 119, "AddFontResource", "f", function() return 1 end)
@@ -491,5 +572,62 @@ def("GDI", 38, "Escape", "h i i f f", function() return 0 end)
 def("GDI", 245, "GetSpoolJob", "w l", function() return 0 end)
 def("GDI", 467, "GDI467", "f f", function() return 0 end)
 def("GDI", 461, "SetObjectOwner", "h h:v", function() end)
+
+-- ---- for the screen savers ----------------------------------------------------------------------
+
+def("GDI", 346, "SetTextAlign", "h w", function(hdc, align)
+    local dc = gdi.dc(hdc)
+    if not dc then return 0 end
+    local old = dc.align or 0
+    dc.align = align
+    return old
+end)
+def("GDI", 345, "GetTextAlign", "h", function(hdc)
+    local dc = gdi.dc(hdc)
+    return dc and dc.align or 0
+end)
+def("GDI", 92, "GetTextFace", "h i p", function(hdc, n, buf)
+    local dc = gdi.dc(hdc)
+    if not dc or not buf or n <= 0 then return 0 end
+    local f = gdi.fontObj(dc)
+    local face = f.symbol or f.rf and f.rf.m.face or "System"
+    return api.putstr(buf, face, n)
+end)
+
+-- Palettes: the default palette is the 16 VGA colours (the display is 16
+-- colours); a created one keeps its entries.
+local function entries(h)
+    local p = obj(h, "palette")
+    if p and p.entries then return p.entries end
+    local t = {}
+    for i = 0, 15 do t[i] = gdi.VGA[i] end
+    return t, 16
+end
+local function count(t) local n = 0; while t[n] do n = n + 1 end; return n end
+def("GDI", 363, "GetPaletteEntries", "h w w p", function(h, start, n, buf)
+    local t = entries(h)
+    local total = count(t)
+    if not buf then return total end
+    local done = 0
+    for i = start, math.min(start + n, total) - 1 do
+        local c = t[i]
+        -- PALETTEENTRY: red, green, blue, flags
+        wb(buf + done * 4, (c >> 16) & 0xFF); wb(buf + done * 4 + 1, (c >> 8) & 0xFF)
+        wb(buf + done * 4 + 2, c & 0xFF); wb(buf + done * 4 + 3, 0)
+        done = done + 1
+    end
+    return done
+end)
+def("GDI", 370, "GetNearestPaletteIndex", "h l", function(h, cr)
+    local t = entries(h)
+    local r, g, b = cr & 0xFF, (cr >> 8) & 0xFF, (cr >> 16) & 0xFF
+    local best, bd = 0, math.huge
+    for i = 0, count(t) - 1 do
+        local c = t[i]
+        local d = (((c >> 16) & 0xFF) - r) ^ 2 + (((c >> 8) & 0xFF) - g) ^ 2 + ((c & 0xFF) - b) ^ 2
+        if d < bd then best, bd = i, d end
+    end
+    return best
+end)
 
 return {}

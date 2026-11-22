@@ -126,6 +126,10 @@ function launch.run(cmd, show)
         return start(target, p, nil, show) and 33 or 2
     end
     if not full then return 2 end
+    -- screen savers are Windows 3.1 programs too, run recompiled
+    if name:upper():match("%.SCR$") then
+        return require("win16.kernel").exec(full, params, show)
+    end
     local hp = hostFileFor(full)
     if not hp then return 2 end
     local data = dosfs.read(full)

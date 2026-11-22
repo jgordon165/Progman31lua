@@ -45,6 +45,13 @@ git-ignored, and release packages are checked for them.
   the date or time moves Windows' clock only, never your computer's.
   `CONTROL.INI` and `SYSTEM.INI` come from your setup disks' templates,
   as Setup made them.
+- **Screen savers**: Control Panel's Desktop lists your `.SCR` savers
+  (Blank Screen, Flying Windows, Marquee, Starfield Simulation) and Test
+  and Setup run them, recompiled. Desktop's choice goes to `SYSTEM.INI`
+  and its delay to `WIN.INI`, as in Windows 3.1: after that long without
+  input, the saver starts, and a key or a mouse move ends it. Flying
+  Windows' windows are Wingdings' flag character; there is no TrueType
+  here, so that one character is drawn as shapes, at any size.
 - **Right-click menus**: not in Windows 3.1, but a right click on an icon
   selects it and offers Open, Move, Copy, Delete and Properties, and on a
   group's empty space New and Arrange Icons. Each is Program Manager's

@@ -379,7 +379,9 @@ end
 
 function defwnd.sysCommand(w, cmd, lp)
     local c = cmd & 0xFFF0
-    if c == SC.CLOSE then
+    if c == 0xF140 then                 -- SC_SCREENSAVE
+        require("win16.screensave").start()
+    elseif c == SC.CLOSE then
         user.send(w, WM.CLOSE, 0, 0)
     elseif c == SC.MINIMIZE then
         user.showWindow(w, 6)

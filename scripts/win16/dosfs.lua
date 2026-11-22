@@ -165,13 +165,23 @@ end
 -- Setup files that Windows keeps in SYSTEM only (Control Panel looks for
 -- SETUP.INF and CONTROL.INF there, and finds its applets there)
 local SYSTEM_ONLY = {INF = true, CPL = true}
+-- and files it keeps in the Windows folder only (Desktop's screen savers)
+local WINDOWS_ONLY = {SCR = true}
+
+-- Whether the data folder's file name shows at full (a path under C:\WINDOWS).
+local function placed(full, name)
+    local ext = name:upper():match("%.(%w+)$")
+    local dir = full:upper():match("^(.*)\\[^\\]*$") or ""
+    if ext and SYSTEM_ONLY[ext] then return dir == dosfs.system:upper() end
+    if ext and WINDOWS_ONLY[ext] then return dir == dosfs.windows:upper() end
+    return true
+end
 
 local function fromData(full)
     if not dataDir or not underWindows(full) then return nil end
     local name = full:match("([^\\]+)$")
     if not name then return nil end
-    local ext = name:upper():match("%.(%w+)$")
-    if ext and SYSTEM_ONLY[ext] and full:upper() ~= (dosfs.system .. "\\" .. name):upper() then return nil end
+    if not placed(full, name) then return nil end
     local p = findCi(dataDir, name)
     if not p then
         local sub = findCi(dataDir, "WINDOWS")
@@ -323,12 +333,12 @@ function dosfs.find(pattern)
                 local p = dataDir .. sep .. e.name
                 local head = host.read(p, false)
                 if head then real = host.expanded_name(head, up):upper() end
-                if not seen[real] and match(real) then
+                if not seen[real] and match(real) and placed(dir .. "\\" .. real, real) then
                     out[#out + 1] = {name = real, dir = false, size = e.size}
                     seen[real] = true
                 end
                 bytes = nil
-            elseif not e.dir and not seen[up] and match(up) then
+            elseif not e.dir and not seen[up] and match(up) and placed(dir .. "\\" .. up, up) then
                 out[#out + 1] = {name = up, dir = false, size = e.size}
                 seen[up] = true
             end
