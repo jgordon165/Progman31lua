@@ -703,6 +703,9 @@ def("USER", 483, "SystemParametersInfo", "w w f w", function(action, param, pv, 
     elseif action == 5 then       -- SPI_GETBORDER
         if p then ww(p, 3) end
         return 1
+    elseif action >= 14 and action <= 17 then
+        -- SPI_GET/SETSCREENSAVETIMEOUT, SPI_GET/SETSCREENSAVEACTIVE
+        return require("win16.screensave").parameters(action, param, p, winini)
     elseif action == 1 then       -- SPI_GETBEEP
         if p then ww(p, 1) end
         return 1

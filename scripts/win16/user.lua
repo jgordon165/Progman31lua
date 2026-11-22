@@ -872,7 +872,10 @@ local function runScript()
     local now = host.ticks() - user.started
     while user.script and user.script[1] and now >= user.script[1].at do
         local st = table.remove(user.script, 1)
-        if st.ev then user.input[#user.input + 1] = {kind = st.ev[1], e = st.ev, t = host.ticks()} end
+        if st.ev then
+            user.input[#user.input + 1] = {kind = st.ev[1], e = st.ev, t = host.ticks()}
+            if user.onInput then user.onInput(st.ev) end
+        end
         if st.shot then
             user.dirty = true
             user.present()
@@ -906,8 +909,10 @@ function user.pumpHost(timeout)
             user.dirty = true
         else
             user.input[#user.input + 1] = {kind = k, e = e, t = host.ticks()}
+            if user.onInput then user.onInput(e) end
         end
     end
+    if user.onIdle then user.onIdle() end
     if user.exitAfter and host.ticks() - user.started > user.exitAfter then
         local shot = user.cfg.opts.screenshot
         if type(shot) == "string" then

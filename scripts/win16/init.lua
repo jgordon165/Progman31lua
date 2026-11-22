@@ -80,6 +80,8 @@ function win16.init(cfg)
     user.setTask(task, mod)
     local games = require("win16.games")
     if games.init(cfg.opts.games) then host.log("Games: " .. games.hostDir()) end
+    local ss = require("win16.screensave")
+    user.onInput, user.onIdle = ss.input, ss.check
     if program ~= "PROGMAN.EXE" then return end
     require("win16.pmcontext").init()
     if not require("win16.defaults").hasGroups() then
